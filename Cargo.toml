@@ -13,4 +13,3 @@ targets = ["mipsel-sony-psx"]
 
 [dependencies]
 bitfield-struct = "0.12.1"
-psx = "0.1.8"

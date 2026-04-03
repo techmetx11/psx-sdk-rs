@@ -27,14 +27,7 @@ name = "ps1-spu"
 version = "0.1.0"
 dependencies = [
  "bitfield-struct",
- "psx",
 ]
-
-[[package]]
-name = "psx"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a60d6f7713e5d76bbb5ae11943688c58332bce232113b996128b4c06950ab78"
 
 [[package]]
 name = "quote"

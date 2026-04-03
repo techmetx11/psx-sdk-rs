@@ -1,13 +1,18 @@
 #![no_std]
-//#![deny(missing_docs)]
+#![deny(missing_docs)]
+#![doc = include_str!("../README.md")]
+
+pub mod volume;
 
 // To use its panic handler
 // The `maybe_uninit_uninit_array` is because of the OBJ importer that the `psx` crate has. We
 // aren't going to be use that here, so hopefully it won't be included in the library
-#![feature(maybe_uninit_uninit_array)]
-extern crate psx;
+//#![feature(maybe_uninit_uninit_array)]
+//extern crate psx;
 
 use bitfield_struct::bitfield;
+
+use crate::volume::Volume;
 
 // This crate is potentially unsafe in other platforms, So we have to stop the compilation if we
 // detect that the compiler is not targetting the PS1
@@ -17,17 +22,22 @@ compile_error!(
 );
 
 /// The SPU structure.
-pub struct Spu {}
+pub struct Spu;
 
 const SPU_CHANNELS: usize = 24;
 
-const SPU_VXPITCH: *mut u16 = 0x1F801C04 as *mut u16;
-const SPU_ADPCM: *mut u16 = 0x1F801C06 as *mut u16;
+const SPU_VOLL: *mut u16 = 0x1F80_1C00 as *mut u16;
+const SPU_VOLR: *mut u16 = 0x1F80_1C02 as *mut u16;
+const SPU_VXPITCH: *mut u16 = 0x1F80_1C04 as *mut u16;
+const SPU_ADPCM: *mut u16 = 0x1F80_1C06 as *mut u16;
 
-const SPU_KEYON: *mut u16 = 0x1F801D88 as *mut u16;
-const SPU_KEYOFF: *mut u16 = 0x1F801D8C as *mut u16;
-const SPU_NON: *mut u16 = 0x1F801D94 as *mut u16;
-const SPU_CNT: *mut u16 = 0x1F801DAA as *mut u16;
+const SPU_KEYON: *mut u16 = 0x1F80_1D88 as *mut u16;
+const SPU_KEYOFF: *mut u16 = 0x1F80_1D8C as *mut u16;
+const SPU_NON: *mut u16 = 0x1F80_1D94 as *mut u16;
+const SPU_CNT: *mut u16 = 0x1F80_1DAA as *mut u16;
+
+const SPU_MVOLL: *mut u16 = 0x1F80_1D80 as *mut u16;
+const SPU_MVOLR: *mut u16 = 0x1F80_1D82 as *mut u16;
 
 /// Check if the specified SPU channel is in range.
 /// A panic is used here because the sound driver should never use a channel above the amount of
@@ -132,26 +142,84 @@ unsafe fn write_bit_32(ptr: *mut u16, bit: usize, value: bool) {
 }
 
 impl Spu {
-    pub fn sample_start(channel: usize, mut sample: u16) {
+    /// Sets the left volume of a channel.
+    pub fn volume_left(&self, channel: usize, vol: Volume) {
+        let vol_bits: u16 = vol.into();
+
+        unsafe {
+            core::ptr::write_volatile(SPU_VOLL.wrapping_add(channel * 0x10), vol_bits);
+        }
+    }
+
+    /// Sets the right volume of a channel.
+    pub fn volume_right(&self, channel: usize, vol: Volume) {
+        let vol_bits: u16 = vol.into();
+
+        unsafe {
+            core::ptr::write_volatile(SPU_VOLR.wrapping_add(channel * 0x10), vol_bits);
+        }
+    }
+
+    /// Sets the volume (both left/right) of a channel.
+    pub fn volume(&self, channel: usize, vol: Volume) {
+        self.volume_left(channel, vol);
+        self.volume_right(channel, vol);
+    }
+
+    /// Sets the SPU's main left volume.
+    pub fn main_volume_left(&self, vol: Volume) {
+        let vol_bits: u16 = vol.into();
+
+        unsafe {
+            core::ptr::write_volatile(SPU_MVOLL, vol_bits);
+        }
+    }
+
+    /// Sets the SPU's main right volume.
+    pub fn main_volume_right(&self, vol: Volume) {
+        let vol_bits: u16 = vol.into();
+
+        unsafe {
+            core::ptr::write_volatile(SPU_MVOLR, vol_bits);
+        }
+    }
+
+    /// Sets the SPU's main volume.
+    pub fn main_volume(&self, vol: Volume) {
+        self.main_volume_left(vol);
+        self.main_volume_right(vol);
+    }
+
+    /// Sets the address of the sample the channel should be playing off of.
+    pub fn sample_start(&self, channel: usize, mut sample: u32) {
         check_channel!(channel);
+
+        if sample > 1 << 20 {
+            panic!("Sample address is bigger than the maximum addressable address in the SPU");
+        }
 
         // In the SPU, samples are indexed by 8-byte units.
         sample >>= 4;
 
         unsafe {
-            core::ptr::write_volatile(SPU_ADPCM.wrapping_add(channel * 0x10), sample);
+            core::ptr::write_volatile(SPU_ADPCM.wrapping_add(channel * 0x10), sample as u16);
         }
     }
 
-    pub fn pitch(channel: usize, pitch: u16) {
+    /// Sets the ADPCM sample rate of the channel to the specified frequency (0x1000 == 441000Hz).
+    ///
+    /// Note: This does not affect the frequency of the channel if noise mode is active on it. For
+    /// that, you should check out [`Self::noise_settings`]
+    pub fn frequency(&self, channel: usize, frequency: u16) {
         check_channel!(channel);
 
         unsafe {
-            core::ptr::write_volatile(SPU_VXPITCH.wrapping_add(channel * 0x10), pitch);
+            core::ptr::write_volatile(SPU_VXPITCH.wrapping_add(channel * 0x10), frequency);
         }
     }
 
-    pub fn key_on(channel: usize) {
+    /// Starts the ADSR envelope and automatically initializes the ADSR volume to zero
+    pub fn key_on(&self, channel: usize) {
         check_channel!(channel);
 
         unsafe {
@@ -159,7 +227,9 @@ impl Spu {
         }
     }
 
-    pub fn key_off(channel: usize) {
+    /// Releases the key in the channel, which starts the Release stage of the ADSR envelope, if
+    /// set.
+    pub fn key_off(&self, channel: usize) {
         check_channel!(channel);
 
         unsafe {
@@ -171,7 +241,7 @@ impl Spu {
     /// outputting ADPCM samples and instead output noise samples from the SPU's Noise Generator.
     ///
     /// The Noise Generator can be configured, using the [`Self::noise_settings`] function.
-    pub fn noise(channel: usize, enable: bool) {
+    pub fn noise(&self, channel: usize, enable: bool) {
         check_channel!(channel);
 
         unsafe {
@@ -185,7 +255,7 @@ impl Spu {
     /// while `shift` coarsely tunes the frequency (by the shifting the initial value of the timer)
     ///
     /// See [The PlayStation Specifications](https://psx-spx.consoledev.net/soundprocessingunitspu/#spu-noise-generator_1) for more details.
-    pub fn noise_settings(shift: usize, step: usize) {
+    pub fn noise_settings(&self, shift: usize, step: usize) {
         if shift > 0x0F || step > 0x03 {
             panic!("Invalid noise settings.");
         }
