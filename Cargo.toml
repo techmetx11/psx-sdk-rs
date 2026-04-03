@@ -1,0 +1,16 @@
+[package]
+name = "ps1-spu"
+readme = "README.md"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+authors = ["techmetx11 <techmetx11@disroot.org>"]
+keywords = ["playstation", "no_std", "audio"]
+categories = ["embedded", "game-development", "no-std"]
+
+[package.metadata.docs.rs]
+targets = ["mipsel-sony-psx"]
+
+[dependencies]
+bitfield-struct = "0.12.1"
+psx = "0.1.8"
