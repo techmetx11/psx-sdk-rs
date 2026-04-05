@@ -33,6 +33,7 @@ const SPU_ADPCM: *mut u16 = 0x1F80_1C06 as *mut u16;
 
 const SPU_KEYON: *mut u16 = 0x1F80_1D88 as *mut u16;
 const SPU_KEYOFF: *mut u16 = 0x1F80_1D8C as *mut u16;
+const SPU_PMON: *mut u16 = 0x1F80_1D90 as *mut u16;
 const SPU_NON: *mut u16 = 0x1F80_1D94 as *mut u16;
 const SPU_CNT: *mut u16 = 0x1F80_1DAA as *mut u16;
 
@@ -142,8 +143,33 @@ unsafe fn write_bit_32(ptr: *mut u16, bit: usize, value: bool) {
 }
 
 impl Spu {
+    /// Initializes the SPU to default values and returns a [`Spu`] structure.
+    pub fn new() -> Self {
+        let spu = Spu;
+
+        spu.noise_settings(0, 0);
+        spu.main_volume(Volume::Normal(0x3FFF));
+
+        for i in 0..23 {
+            spu.reset_channel(i);
+        }
+
+        spu
+    }
+
+    /// Resets a channel
+    pub fn reset_channel(&self, channel: usize) {
+        self.frequency(channel, 0);
+        self.volume(channel, Volume::Normal(0));
+        self.sample_start(channel, 0);
+        self.key_off(channel);
+        self.pitch_mod(channel, false);
+        self.noise(channel, false);
+    }
+
     /// Sets the left volume of a channel.
     pub fn volume_left(&self, channel: usize, vol: Volume) {
+        check_channel!(channel);
         let vol_bits: u16 = vol.into();
 
         unsafe {
@@ -153,6 +179,7 @@ impl Spu {
 
     /// Sets the right volume of a channel.
     pub fn volume_right(&self, channel: usize, vol: Volume) {
+        check_channel!(channel);
         let vol_bits: u16 = vol.into();
 
         unsafe {
@@ -271,5 +298,24 @@ impl Spu {
         unsafe {
             core::ptr::write_volatile(SPU_CNT, config.into_bits());
         }
+    }
+
+    /// Enables or disables pitch modulation of the specified channel from the amplitude of the
+    /// previous channel.
+    ///
+    /// Note: Setting pitch modulation on channel 0 will do nothing, as there is no previous
+    /// channel.
+    pub fn pitch_mod(&self, channel: usize, enable: bool) {
+        check_channel!(channel);
+
+        unsafe {
+            write_bit_32(SPU_PMON, channel, enable);
+        }
+    }
+}
+
+impl Default for Spu {
+    fn default() -> Self {
+        Self::new()
     }
 }
