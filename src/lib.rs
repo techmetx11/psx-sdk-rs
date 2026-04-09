@@ -2,17 +2,16 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
+mod memory;
 pub mod volume;
 
-// To use its panic handler
-// The `maybe_uninit_uninit_array` is because of the OBJ importer that the `psx` crate has. We
-// aren't going to be use that here, so hopefully it won't be included in the library
-//#![feature(maybe_uninit_uninit_array)]
-//extern crate psx;
+use core::ops::Range;
 
+use crate::{
+    memory::{VolatileU16, VolatileU32},
+    volume::Volume,
+};
 use bitfield_struct::bitfield;
-
-use crate::volume::Volume;
 
 // This crate is potentially unsafe in other platforms, So we have to stop the compilation if we
 // detect that the compiler is not targetting the PS1
@@ -21,35 +20,21 @@ compile_error!(
     "This crate is meant to be compiled for the PlayStation 1, and cannot be used anywhere else."
 );
 
-/// The SPU structure.
-pub struct Spu;
-
 const SPU_CHANNELS: usize = 24;
 
-const SPU_VOLL: *mut u16 = 0x1F80_1C00 as *mut u16;
-const SPU_VOLR: *mut u16 = 0x1F80_1C02 as *mut u16;
-const SPU_VXPITCH: *mut u16 = 0x1F80_1C04 as *mut u16;
-const SPU_ADPCM: *mut u16 = 0x1F80_1C06 as *mut u16;
+const SPU_CHANNEL_REGS: *mut SpuChannelRegs = 0x1F80_1C00 as *mut SpuChannelRegs;
 
-const SPU_KEYON: *mut u16 = 0x1F80_1D88 as *mut u16;
-const SPU_KEYOFF: *mut u16 = 0x1F80_1D8C as *mut u16;
-const SPU_PMON: *mut u16 = 0x1F80_1D90 as *mut u16;
-const SPU_NON: *mut u16 = 0x1F80_1D94 as *mut u16;
-const SPU_CNT: *mut u16 = 0x1F80_1DAA as *mut u16;
+const SPU_KEYON: *mut VolatileU32 = 0x1F80_1D88 as *mut VolatileU32;
+const SPU_KEYOFF: *mut VolatileU32 = 0x1F80_1D8C as *mut VolatileU32;
+const SPU_NON: *mut VolatileU32 = 0x1F80_1D94 as *mut VolatileU32;
+const SPU_PMON: *mut VolatileU32 = 0x1F80_1D90 as *mut VolatileU32;
+const SPU_CNT: *mut VolatileU16 = 0x1F80_1DAA as *mut VolatileU16;
 
-const SPU_MVOLL: *mut u16 = 0x1F80_1D80 as *mut u16;
-const SPU_MVOLR: *mut u16 = 0x1F80_1D82 as *mut u16;
+const SPU_MVOLL: *mut VolatileU16 = 0x1F80_1D80 as *mut VolatileU16;
+const SPU_MVOLR: *mut VolatileU16 = 0x1F80_1D82 as *mut VolatileU16;
 
-/// Check if the specified SPU channel is in range.
-/// A panic is used here because the sound driver should never use a channel above the amount of
-/// channels in the SPU.
-macro_rules! check_channel {
-    ($channel:ident) => {
-        if $channel > SPU_CHANNELS {
-            panic!("Channel does not exist. {{$channel}} > {SPU_CHANNELS}");
-        }
-    };
-}
+/// The SPU structure.
+pub struct Spu;
 
 #[derive(Debug)]
 #[repr(u8)]
@@ -112,33 +97,130 @@ struct SpuControlRegs {
     cdda_enable: bool,
 }
 
-/// This function reads a 32-bit value from a memory address using a pair of 16-bit reads. This is
-/// to avoid issues with the SPU data bus when using 32-bit hardware accesses.
-unsafe fn read_32(ptr: *mut u16) -> u32 {
-    let lower: u16;
-    let upper: u16;
-    unsafe {
-        lower = core::ptr::read_volatile(ptr);
-        upper = core::ptr::read_volatile(ptr.wrapping_add(1));
-    }
-
-    lower as u32 | (upper as u32) << 16
+#[repr(C)]
+struct SpuChannelRegs {
+    volume_left: VolatileU16,
+    volume_right: VolatileU16,
+    frequency: VolatileU16,
+    sample_start: VolatileU16,
+    adsr: VolatileU32,
+    adsr_volume: VolatileU16,
+    sample_repeat: VolatileU16,
 }
 
-/// This function writes a 32-bit value to a memory address using a pair of 16-bit writes. This is
-/// to avoid issues with the SPU data bus when using 32-bit hardware accesses.
-unsafe fn write_32(ptr: *mut u16, value: u32) {
-    unsafe {
-        core::ptr::write_volatile(ptr, value as u16);
-        core::ptr::write_volatile(ptr.wrapping_add(1), value.unbounded_shr(16) as u16);
+struct SpuChannel {
+    regs: &mut SpuChannelRegs,
+    num: usize,
+}
+
+impl SpuChannel {
+    /// Resets a channel
+    pub fn reset(&self) {
+        self.frequency(0);
+        self.volume(Volume::Normal(0));
+        self.sample_start(0);
+        self.key_off();
+        self.pitch_mod(false);
+        self.noise(false);
+    }
+
+    /// Sets the left volume of a channel.
+    pub fn volume_left(&self, vol: Volume) {
+        let vol_bits: u16 = vol.into();
+
+        self.regs.volume_left.set(vol_bits);
+    }
+
+    /// Sets the right volume of a channel.
+    pub fn volume_right(&self, vol: Volume) {
+        let vol_bits: u16 = vol.into();
+
+        self.regs.volume_right.set(vol_bits);
+    }
+
+    /// Sets the volume (both left/right) of a channel.
+    pub fn volume(&self, vol: Volume) {
+        self.volume_left(vol);
+        self.volume_right(vol);
+    }
+
+    /// Sets the address of the sample the channel should be playing off of.
+    pub fn sample_start(&self, mut sample: u32) {
+        if sample > 1 << 19 {
+            panic!("Sample address is bigger than the maximum addressable address in the SPU");
+        }
+
+        // In the SPU, samples are indexed by 8-byte units.
+        sample >>= 4;
+
+        self.regs.sample_start.set(sample as u16);
+    }
+
+    /// Sets the ADPCM sample rate of the channel to the specified frequency (0x1000 == 441000Hz).
+    ///
+    /// Note: This does not affect the frequency of the channel if noise mode is active on it. For
+    /// that, you should check out [`Self::noise_settings`]
+    pub fn frequency(&self, frequency: u16) {
+        self.regs.frequency.set(frequency);
+    }
+
+    /// Starts the ADSR envelope and automatically initializes the ADSR volume to zero
+    pub fn key_on(&self) {
+        unsafe {
+            (*SPU_KEYON).set_bit(self.num as u16, true);
+        }
+    }
+
+    /// Releases the key in the channel, which starts the Release stage of the ADSR envelope, if
+    /// set.
+    pub fn key_off(&self) {
+        unsafe {
+            (*SPU_KEYOFF).set_bit(self.num as u16, true);
+        }
+    }
+
+    /// Enable or disable noise mode on a specific channel. If enabled, the channel will stop
+    /// outputting ADPCM samples and instead output noise samples from the SPU's Noise Generator.
+    ///
+    /// The Noise Generator can be configured, using the [`Self::noise_settings`] function.
+    pub fn noise(&self, enable: bool) {
+        unsafe {
+            (*SPU_NON).set_bit(self.num as u16, enable);
+        }
+    }
+
+    /// Enables or disables pitch modulation of the specified channel from the amplitude of the
+    /// previous channel.
+    ///
+    /// Note: Setting pitch modulation on channel 0 will do nothing, as there is no previous
+    /// channel.
+    pub fn pitch_mod(&self, enable: bool) {
+        unsafe {
+            (*SPU_PMON).set_bit(self.num as u16, enable);
+        }
     }
 }
 
-unsafe fn write_bit_32(ptr: *mut u16, bit: usize, value: bool) {
-    unsafe {
-        let mut data = read_32(ptr);
-        data |= (if value { 1 } else { 0 }) << bit;
-        write_32(ptr, data);
+struct ChannelIterator {
+    spu: &Spu,
+    channels: Range<usize>,
+}
+
+impl Iterator for ChannelIterator {
+    type Item = SpuChannel;
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(num) = self.channels.next() {
+            // SAFETY: The channel iterator is always initialized from [`Spu::channels()`], with
+            // the range being set from 0 to [`SPU_CHANNELS`]
+            unsafe { Some(self.spu.unchecked_channel(num)) }
+        } else {
+            None
+        }
+    }
+}
+impl ExactSizeIterator for ChannelIterator {
+    fn len(&self) -> usize {
+        self.channels.len()
     }
 }
 
@@ -150,47 +232,43 @@ impl Spu {
         spu.noise_settings(0, 0);
         spu.main_volume(Volume::Normal(0x3FFF));
 
-        for i in 0..23 {
-            spu.reset_channel(i);
-        }
+        spu.channels().for_each(|channel| {
+            channel.reset();
+        });
 
         spu
     }
 
-    /// Resets a channel
-    pub fn reset_channel(&self, channel: usize) {
-        self.frequency(channel, 0);
-        self.volume(channel, Volume::Normal(0));
-        self.sample_start(channel, 0);
-        self.key_off(channel);
-        self.pitch_mod(channel, false);
-        self.noise(channel, false);
-    }
-
-    /// Sets the left volume of a channel.
-    pub fn volume_left(&self, channel: usize, vol: Volume) {
-        check_channel!(channel);
-        let vol_bits: u16 = vol.into();
-
+    /// Gets a specific channel from the SPu without checking bounds.
+    ///
+    /// # Safety
+    ///
+    /// Calling this method with non-existent channel number is *undefined behavior*. You must make
+    /// sure that the channel is within the range of the channels that the SPU has.
+    pub unsafe fn unchecked_channel(&self, channel: usize) -> SpuChannel {
         unsafe {
-            core::ptr::write_volatile(SPU_VOLL.wrapping_add(channel * 0x10), vol_bits);
+            SpuChannel {
+                regs: &mut (*SPU_CHANNEL_REGS.wrapping_add(channel as usize)),
+                num: channel,
+            }
         }
     }
 
-    /// Sets the right volume of a channel.
-    pub fn volume_right(&self, channel: usize, vol: Volume) {
-        check_channel!(channel);
-        let vol_bits: u16 = vol.into();
-
-        unsafe {
-            core::ptr::write_volatile(SPU_VOLR.wrapping_add(channel * 0x10), vol_bits);
+    /// Gets a specific channel from the SPU. If the channel number is not in range of the amount
+    /// of channels that the SPU has, it'll return [`None`].
+    pub fn channel(&self, channel: usize) -> Option<SpuChannel> {
+        if channel < SPU_CHANNELS {
+            Some(unsafe { self.unchecked_channel(channel) })
+        } else {
+            None
         }
     }
 
-    /// Sets the volume (both left/right) of a channel.
-    pub fn volume(&self, channel: usize, vol: Volume) {
-        self.volume_left(channel, vol);
-        self.volume_right(channel, vol);
+    pub fn channels(&self) -> ChannelIterator {
+        ChannelIterator {
+            spu: self,
+            channels: (0..SPU_CHANNELS),
+        }
     }
 
     /// Sets the SPU's main left volume.
@@ -198,7 +276,7 @@ impl Spu {
         let vol_bits: u16 = vol.into();
 
         unsafe {
-            core::ptr::write_volatile(SPU_MVOLL, vol_bits);
+            (*SPU_MVOLL).set(vol_bits);
         }
     }
 
@@ -207,7 +285,7 @@ impl Spu {
         let vol_bits: u16 = vol.into();
 
         unsafe {
-            core::ptr::write_volatile(SPU_MVOLR, vol_bits);
+            (*SPU_MVOLR).set(vol_bits);
         }
     }
 
@@ -215,65 +293,6 @@ impl Spu {
     pub fn main_volume(&self, vol: Volume) {
         self.main_volume_left(vol);
         self.main_volume_right(vol);
-    }
-
-    /// Sets the address of the sample the channel should be playing off of.
-    pub fn sample_start(&self, channel: usize, mut sample: u32) {
-        check_channel!(channel);
-
-        if sample > 1 << 20 {
-            panic!("Sample address is bigger than the maximum addressable address in the SPU");
-        }
-
-        // In the SPU, samples are indexed by 8-byte units.
-        sample >>= 4;
-
-        unsafe {
-            core::ptr::write_volatile(SPU_ADPCM.wrapping_add(channel * 0x10), sample as u16);
-        }
-    }
-
-    /// Sets the ADPCM sample rate of the channel to the specified frequency (0x1000 == 441000Hz).
-    ///
-    /// Note: This does not affect the frequency of the channel if noise mode is active on it. For
-    /// that, you should check out [`Self::noise_settings`]
-    pub fn frequency(&self, channel: usize, frequency: u16) {
-        check_channel!(channel);
-
-        unsafe {
-            core::ptr::write_volatile(SPU_VXPITCH.wrapping_add(channel * 0x10), frequency);
-        }
-    }
-
-    /// Starts the ADSR envelope and automatically initializes the ADSR volume to zero
-    pub fn key_on(&self, channel: usize) {
-        check_channel!(channel);
-
-        unsafe {
-            write_bit_32(SPU_KEYON, channel, true);
-        }
-    }
-
-    /// Releases the key in the channel, which starts the Release stage of the ADSR envelope, if
-    /// set.
-    pub fn key_off(&self, channel: usize) {
-        check_channel!(channel);
-
-        unsafe {
-            write_bit_32(SPU_KEYOFF, channel, true);
-        }
-    }
-
-    /// Enable or disable noise mode on a specific channel. If enabled, the channel will stop
-    /// outputting ADPCM samples and instead output noise samples from the SPU's Noise Generator.
-    ///
-    /// The Noise Generator can be configured, using the [`Self::noise_settings`] function.
-    pub fn noise(&self, channel: usize, enable: bool) {
-        check_channel!(channel);
-
-        unsafe {
-            write_bit_32(SPU_NON, channel, enable);
-        }
     }
 
     /// Configure the Noise Generator for all channels that have noise mode enabled.
@@ -289,27 +308,14 @@ impl Spu {
         let mut config: SpuControlRegs;
 
         unsafe {
-            config = core::ptr::read_volatile(SPU_CNT).into();
+            config = (*SPU_CNT).get().into();
         }
 
         config.set_noise_freq_shift(shift);
         config.set_noise_freq_step(step);
 
         unsafe {
-            core::ptr::write_volatile(SPU_CNT, config.into_bits());
-        }
-    }
-
-    /// Enables or disables pitch modulation of the specified channel from the amplitude of the
-    /// previous channel.
-    ///
-    /// Note: Setting pitch modulation on channel 0 will do nothing, as there is no previous
-    /// channel.
-    pub fn pitch_mod(&self, channel: usize, enable: bool) {
-        check_channel!(channel);
-
-        unsafe {
-            write_bit_32(SPU_PMON, channel, enable);
+            (*SPU_CNT).set(config.into_bits());
         }
     }
 }

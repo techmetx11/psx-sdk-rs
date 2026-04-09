@@ -12,4 +12,5 @@ categories = ["embedded", "game-development", "no-std"]
 targets = ["mipsel-sony-psx"]
 
 [dependencies]
+psx = "0.1.8"
 bitfield-struct = "0.12.1"
