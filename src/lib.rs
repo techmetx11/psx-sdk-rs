@@ -5,13 +5,12 @@
 mod memory;
 pub mod volume;
 
-use core::ops::Range;
-
 use crate::{
     memory::{VolatileU16, VolatileU32},
     volume::Volume,
 };
-use bitfield_struct::bitfield;
+use core::ops::Range;
+use paste::paste;
 
 // This crate is potentially unsafe in other platforms, So we have to stop the compilation if we
 // detect that the compiler is not targetting the PS1
@@ -28,7 +27,12 @@ const SPU_KEYON: *mut VolatileU32 = 0x1F80_1D88 as *mut VolatileU32;
 const SPU_KEYOFF: *mut VolatileU32 = 0x1F80_1D8C as *mut VolatileU32;
 const SPU_NON: *mut VolatileU32 = 0x1F80_1D94 as *mut VolatileU32;
 const SPU_PMON: *mut VolatileU32 = 0x1F80_1D90 as *mut VolatileU32;
-const SPU_CNT: *mut VolatileU16 = 0x1F80_1DAA as *mut VolatileU16;
+
+const SPU_TRANSADDR: *mut VolatileU16 = 0x1F80_1DA6 as *mut VolatileU16;
+const SPU_FIFO: *mut VolatileU16 = 0x1F80_1DA8 as *mut VolatileU16;
+const SPU_CNT: *mut SpuControlRegs = 0x1F80_1DAA as *mut SpuControlRegs;
+const SPU_TRANSCNT: *mut VolatileU16 = 0x1F80_1DAC as *mut VolatileU16;
+const SPU_STAT: *mut VolatileU16 = 0x1F80_1DAE as *mut VolatileU16;
 
 const SPU_MVOLL: *mut VolatileU16 = 0x1F80_1D80 as *mut VolatileU16;
 const SPU_MVOLR: *mut VolatileU16 = 0x1F80_1D82 as *mut VolatileU16;
@@ -43,6 +47,14 @@ enum SpuRamTransfer {
     ManualWrite,
     DMAWrite,
     DMARead,
+}
+
+enum SpuTransferMode {
+    Fill,
+    Normal,
+    Repeat2,
+    Repeat4,
+    Repeat8,
 }
 
 impl SpuRamTransfer {
@@ -61,40 +73,53 @@ impl SpuRamTransfer {
     }
 }
 
-#[bitfield(u16, order = Msb)]
 struct SpuControlRegs {
-    #[bits(1)]
-    enable: bool,
+    regs: VolatileU16,
+}
 
-    #[bits(1)]
-    mute: bool,
+macro_rules! define_bit {
+    ($name:ident, $bit:literal) => {
+        #[inline]
+        pub fn $name(&self) -> bool {
+            self.regs.get_bit($bit)
+        }
 
-    #[bits(4)]
-    noise_freq_shift: usize,
+        #[inline]
+        paste! {
+            pub fn [<set_ $name>](&self, value: bool) {
+                self.regs.set_bit($bit, value);
+            }
+        }
+    };
+    ($name:ident, $mask:literal, $shift:literal) => {
+        #[inline]
+        pub fn $name(&self) -> u16 {
+            (self.regs.get() >> $shift) & $mask
+        }
 
-    #[bits(2)]
-    noise_freq_step: usize,
+        #[inline]
+        paste! {
+            pub fn [<set_ $name>](&self, value: u16) {
+                self.regs.set((self.regs.get() & ~$mask) | ((value & $mask) << $shift));
+            }
+        }
+    };
+}
 
-    #[bits(1)]
-    reverb_master: bool,
+impl SpuControlRegs {
+    define_bit!(enable, 15);
+    define_bit!(mute, 14);
+    define_bit!(noise_freq_shift, 0b1111, 10);
+    define_bit!(noise_freq_step, 0b11, 8);
+    define_bit!(reverb_master, 7);
+    define_bit!(irq9, 6);
 
-    #[bits(1)]
-    irq9: bool,
+    //ram_transfer_mode: SpuRamTransfer,
 
-    #[bits(2)]
-    ram_transfer_mode: SpuRamTransfer,
-
-    #[bits(1)]
-    ext_reverb: bool,
-
-    #[bits(1)]
-    cdda_reverb: bool,
-
-    #[bits(1)]
-    ext_enable: bool,
-
-    #[bits(1)]
-    cdda_enable: bool,
+    define_bit!(ext_reverb, 3);
+    define_bit!(cdda_reverb, 2);
+    define_bit!(ext_enable, 1);
+    define_bit!(cdda_enable, 0);
 }
 
 #[repr(C)]
@@ -145,15 +170,16 @@ impl SpuChannel {
     }
 
     /// Sets the address of the sample the channel should be playing off of.
+    ///
+    /// Note: The SPU RAM is only addressable by 8-byte chunks, so the right-most 3 bits will be
+    /// ignored.
     pub fn sample_start(&self, mut sample: u32) {
         if sample > 1 << 19 {
             panic!("Sample address is bigger than the maximum addressable address in the SPU");
         }
 
         // In the SPU, samples are indexed by 8-byte units.
-        sample >>= 4;
-
-        self.regs.sample_start.set(sample as u16);
+        self.regs.sample_start.set(sample.unbounded_shr(3) as u16);
     }
 
     /// Sets the ADPCM sample rate of the channel to the specified frequency (0x1000 == 441000Hz).
@@ -302,21 +328,37 @@ impl Spu {
     ///
     /// See [The PlayStation Specifications](https://psx-spx.consoledev.net/soundprocessingunitspu/#spu-noise-generator_1) for more details.
     pub fn noise_settings(&self, shift: usize, step: usize) {
-        if shift > 0x0F || step > 0x03 {
-            panic!("Invalid noise settings.");
-        }
-        let mut config: SpuControlRegs;
-
         unsafe {
-            config = (*SPU_CNT).get().into();
+            (*SPU_CNT).set_noise_freq_shift(shift as u16);
+            (*SPU_CNT).set_noise_freq_step(step as u16);
         }
+    }
 
-        config.set_noise_freq_shift(shift);
-        config.set_noise_freq_step(step);
-
+    fn set_transfer_mode(&self, mode: SpuTransferMode) {
         unsafe {
-            (*SPU_CNT).set(config.into_bits());
+            match mode {
+                SpuTransferMode::Fill => (*SPU_TRANSCNT).set(0),
+                SpuTransferMode::Normal => (*SPU_TRANSCNT).set(2 << 1),
+                SpuTransferMode::Repeat2 => (*SPU_TRANSCNT).set(3 << 1),
+                SpuTransferMode::Repeat4 => (*SPU_TRANSCNT).set(4 << 1),
+                SpuTransferMode::Repeat8 => (*SPU_TRANSCNT).set(5 << 1),
+            }
         }
+    }
+
+    fn set_transfer_address(&self, address: u32) {
+        unsafe {
+            (*SPU_TRANSADDR).set(address.unbounded_shr(3) as u16);
+        }
+    }
+
+    /// Write data to an address in the SPU's RAM, without using the SPU's DMA channel.
+    ///
+    /// Note: The SPU RAM is only addressable by 8-byte chunks, so the right-most 3 bits will be
+    /// ignored.
+    pub fn write_cpu(&self, address: u32, data: &[u16]) {
+        // Set the SPU transfer mode to normal.
+        self.set_transfer_mode(SpuTransferMode::Normal);
     }
 }
 
