@@ -5,20 +5,24 @@ pub(crate) struct VolatileU16 {
 }
 
 impl VolatileU16 {
+    #[inline]
     pub fn get(&self) -> u16 {
         unsafe { core::ptr::read_volatile(addr_of!(self.value)) }
     }
 
+    #[inline]
     pub fn set(&self, value: u16) {
         unsafe {
             core::ptr::write_volatile(addr_of_mut!(self.value), value);
         }
     }
 
+    #[inline]
     pub fn set_bit(&self, index: u16, value: bool) {
         self.set(self.get() | (if value { 1 } else { 0 }) << index);
     }
 
+    #[inline]
     pub fn get_bit(&self, index: u16) -> bool {
         if (self.get() & 1 << index) != 0 {
             true
@@ -34,6 +38,7 @@ pub(crate) struct VolatileU32 {
 }
 
 impl VolatileU32 {
+    #[inline]
     pub fn get(&self) -> u32 {
         unsafe {
             (core::ptr::read_volatile(addr_of!(self.low)) as u32)
@@ -41,6 +46,7 @@ impl VolatileU32 {
         }
     }
 
+    #[inline]
     pub fn set(&self, value: u32) {
         unsafe {
             core::ptr::write_volatile(addr_of_mut!(self.low), value as u16);
@@ -48,10 +54,12 @@ impl VolatileU32 {
         }
     }
 
+    #[inline]
     pub fn set_bit(&self, index: u16, value: bool) {
         self.set(self.get() | (if value { 1 } else { 0 }) << index);
     }
 
+    #[inline]
     pub fn get_bit(&self, index: u16) -> bool {
         if (self.get() & 1 << index) != 0 {
             true
