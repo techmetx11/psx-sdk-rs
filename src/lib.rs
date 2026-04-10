@@ -32,7 +32,7 @@ const SPU_TRANSADDR: *mut VolatileU16 = 0x1F80_1DA6 as *mut VolatileU16;
 const SPU_FIFO: *mut VolatileU16 = 0x1F80_1DA8 as *mut VolatileU16;
 const SPU_CNT: *mut SpuControlRegs = 0x1F80_1DAA as *mut SpuControlRegs;
 const SPU_TRANSCNT: *mut VolatileU16 = 0x1F80_1DAC as *mut VolatileU16;
-const SPU_STAT: *mut VolatileU16 = 0x1F80_1DAE as *mut VolatileU16;
+const SPU_STAT: *mut SpuStatusRegs = 0x1F80_1DAE as *mut SpuStatusRegs;
 
 const SPU_MVOLL: *mut VolatileU16 = 0x1F80_1D80 as *mut VolatileU16;
 const SPU_MVOLR: *mut VolatileU16 = 0x1F80_1D82 as *mut VolatileU16;
@@ -40,13 +40,12 @@ const SPU_MVOLR: *mut VolatileU16 = 0x1F80_1D82 as *mut VolatileU16;
 /// The SPU structure.
 pub struct Spu;
 
-#[derive(Debug)]
 #[repr(u8)]
 enum SpuRamTransfer {
-    Stop,
-    ManualWrite,
-    DMAWrite,
-    DMARead,
+    Stop = 0,
+    ManualWrite = 1,
+    DMAWrite = 2,
+    DMARead = 3,
 }
 
 enum SpuTransferMode {
@@ -55,26 +54,6 @@ enum SpuTransferMode {
     Repeat2,
     Repeat4,
     Repeat8,
-}
-
-impl SpuRamTransfer {
-    const fn into_bits(self) -> u8 {
-        self as _
-    }
-
-    const fn from_bits(value: u8) -> Self {
-        match value {
-            0 => Self::Stop,
-            1 => Self::ManualWrite,
-            2 => Self::DMAWrite,
-            3 => Self::DMARead,
-            _ => unreachable!(),
-        }
-    }
-}
-
-struct SpuControlRegs {
-    regs: VolatileU16,
 }
 
 macro_rules! define_bit {
@@ -106,6 +85,10 @@ macro_rules! define_bit {
     };
 }
 
+struct SpuControlRegs {
+    regs: VolatileU16,
+}
+
 impl SpuControlRegs {
     define_bit!(enable, 15);
     define_bit!(mute, 14);
@@ -114,12 +97,26 @@ impl SpuControlRegs {
     define_bit!(reverb_master, 7);
     define_bit!(irq9, 6);
 
-    //ram_transfer_mode: SpuRamTransfer,
+    define_bit!(ram_transfer, 0b11, 4);
 
     define_bit!(ext_reverb, 3);
     define_bit!(cdda_reverb, 2);
     define_bit!(ext_enable, 1);
     define_bit!(cdda_enable, 0);
+}
+
+struct SpuStatusRegs {
+    regs: VolatileU16,
+}
+
+impl SpuStatusRegs {
+    define_bit!(capture_buffer, 11);
+    define_bit!(transfer_busy, 10);
+    define_bit!(dma_read_request, 9);
+    define_bit!(dma_write_request, 8);
+    define_bit!(dma_rw_request, 7);
+    define_bit!(irq9, 6);
+    define_bit!(ram_transfer, 0b11, 4);
 }
 
 #[repr(C)]
@@ -334,6 +331,17 @@ impl Spu {
         }
     }
 
+    fn set_ram_transfer(&self, mode: SpuRamTransfer) {
+        unsafe {
+            let mode_val: u16 = mode.into();
+
+            // Change the RAM transfer mode.
+            (*SPU_CNT).set_ram_transfer(mode_val);
+
+            // Wait until the change gets applied to the SPU.
+            while (*SPU_STAT).ram_transfer() != mode_val {}
+        }
+    }
     fn set_transfer_mode(&self, mode: SpuTransferMode) {
         unsafe {
             match mode {
@@ -359,6 +367,27 @@ impl Spu {
     pub fn write_cpu(&self, address: u32, data: &[u16]) {
         // Set the SPU transfer mode to normal.
         self.set_transfer_mode(SpuTransferMode::Normal);
+
+        // Set the RAM transfer mode to "Stop" in SPUCNT
+        self.set_ram_transfer(SpuRamTransfer::Stop);
+
+        // Set the address to transfer data to.
+        self.set_transfer_address(address);
+
+        for chunk in data.chunks(32) {
+            // Send each half-word to the SPU's FIFO (the FIFO only has space for 32.)
+            for word in chunk {
+                unsafe {
+                    (*SPU_FIFO).set(*word);
+                }
+            }
+
+            // Set the RAM transfer mode to "Manual Write" now.
+            self.set_ram_transfer(SpuRamTransfer::ManualWrite);
+
+            // Wait for the Transfer Busy flag to go off.
+            unsafe { while (*SPU_STAT).transfer_busy() {} }
+        }
     }
 }
 
