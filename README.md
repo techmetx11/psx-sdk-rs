@@ -1,10 +1,20 @@
-# ps1-spu
+# psx-spu
 
 This crate provides a safe low-level bindings over the PlayStation 1's Sound Processing Unit.
 
-## What this crate doesn't do
+## What this crate can do (as of right now.)
 
-- Provides access to the SPU RAM (the [psx](https://github.com/ayrtonm/psx-sdk-rs) crate can do that.)
+- Iterate through channels.
+- Set the frequency and volumes of channels.
+- Upload samples to the SPU RAM
+- Pitch modulation!
+
+## What this crate can't do (todo)
+
+- ADSR envelopes
+- Upload samples using DMA (would use `psx` for this, but their library is having issues being compiled)
+- Reverb/Echo and IIR filters
+- Maybe some things I've forgotten here.
 
 ## License
 
