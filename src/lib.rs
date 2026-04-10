@@ -48,6 +48,17 @@ enum SpuRamTransfer {
     DMARead = 3,
 }
 
+impl From<SpuRamTransfer> for u16 {
+    fn from(value: SpuRamTransfer) -> Self {
+        match value {
+            SpuRamTransfer::Stop => 0,
+            SpuRamTransfer::ManualWrite => 1,
+            SpuRamTransfer::DMAWrite => 2,
+            SpuRamTransfer::DMARead => 3,
+        }
+    }
+}
+
 enum SpuTransferMode {
     Fill,
     Normal,
@@ -65,7 +76,7 @@ macro_rules! define_bit {
 
         #[inline]
         paste! {
-            pub fn [<set_ $name>](&self, value: bool) {
+            pub fn [<set_ $name>](&mut self, value: bool) {
                 self.regs.set_bit($bit, value);
             }
         }
@@ -78,8 +89,8 @@ macro_rules! define_bit {
 
         #[inline]
         paste! {
-            pub fn [<set_ $name>](&self, value: u16) {
-                self.regs.set((self.regs.get() & ~$mask) | ((value & $mask) << $shift));
+            pub fn [<set_ $name>](&mut self, value: u16) {
+                self.regs.set((self.regs.get() & !$mask) | ((value & $mask) << $shift));
             }
         }
     };
@@ -130,14 +141,15 @@ struct SpuChannelRegs {
     sample_repeat: VolatileU16,
 }
 
-struct SpuChannel {
-    regs: &mut SpuChannelRegs,
+/// Reference to a SPU channel.
+pub struct SpuChannel<'a> {
+    regs: &'a mut SpuChannelRegs,
     num: usize,
 }
 
-impl SpuChannel {
+impl<'a> SpuChannel<'a> {
     /// Resets a channel
-    pub fn reset(&self) {
+    pub fn reset(&mut self) {
         self.frequency(0);
         self.volume(Volume::Normal(0));
         self.sample_start(0);
@@ -147,21 +159,21 @@ impl SpuChannel {
     }
 
     /// Sets the left volume of a channel.
-    pub fn volume_left(&self, vol: Volume) {
+    pub fn volume_left(&mut self, vol: Volume) {
         let vol_bits: u16 = vol.into();
 
         self.regs.volume_left.set(vol_bits);
     }
 
     /// Sets the right volume of a channel.
-    pub fn volume_right(&self, vol: Volume) {
+    pub fn volume_right(&mut self, vol: Volume) {
         let vol_bits: u16 = vol.into();
 
         self.regs.volume_right.set(vol_bits);
     }
 
     /// Sets the volume (both left/right) of a channel.
-    pub fn volume(&self, vol: Volume) {
+    pub fn volume(&mut self, vol: Volume) {
         self.volume_left(vol);
         self.volume_right(vol);
     }
@@ -170,7 +182,7 @@ impl SpuChannel {
     ///
     /// Note: The SPU RAM is only addressable by 8-byte chunks, so the right-most 3 bits will be
     /// ignored.
-    pub fn sample_start(&self, mut sample: u32) {
+    pub fn sample_start(&mut self, sample: u32) {
         if sample > 1 << 19 {
             panic!("Sample address is bigger than the maximum addressable address in the SPU");
         }
@@ -183,7 +195,7 @@ impl SpuChannel {
     ///
     /// Note: This does not affect the frequency of the channel if noise mode is active on it. For
     /// that, you should check out [`Self::noise_settings`]
-    pub fn frequency(&self, frequency: u16) {
+    pub fn frequency(&mut self, frequency: u16) {
         self.regs.frequency.set(frequency);
     }
 
@@ -224,13 +236,14 @@ impl SpuChannel {
     }
 }
 
-struct ChannelIterator {
-    spu: &Spu,
+/// SPU channel iterator
+pub struct ChannelIterator<'a> {
+    spu: &'a Spu,
     channels: Range<usize>,
 }
 
-impl Iterator for ChannelIterator {
-    type Item = SpuChannel;
+impl<'a> Iterator for ChannelIterator<'a> {
+    type Item = SpuChannel<'a>;
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(num) = self.channels.next() {
             // SAFETY: The channel iterator is always initialized from [`Spu::channels()`], with
@@ -241,13 +254,13 @@ impl Iterator for ChannelIterator {
         }
     }
 }
-impl ExactSizeIterator for ChannelIterator {
+impl<'a> ExactSizeIterator for ChannelIterator<'a> {
     fn len(&self) -> usize {
         self.channels.len()
     }
 }
 
-impl Spu {
+impl<'a> Spu {
     /// Initializes the SPU to default values and returns a [`Spu`] structure.
     pub fn new() -> Self {
         let spu = Spu;
@@ -255,7 +268,7 @@ impl Spu {
         spu.noise_settings(0, 0);
         spu.main_volume(Volume::Normal(0x3FFF));
 
-        spu.channels().for_each(|channel| {
+        spu.channels().for_each(|mut channel| {
             channel.reset();
         });
 
@@ -268,10 +281,10 @@ impl Spu {
     ///
     /// Calling this method with non-existent channel number is *undefined behavior*. You must make
     /// sure that the channel is within the range of the channels that the SPU has.
-    pub unsafe fn unchecked_channel(&self, channel: usize) -> SpuChannel {
+    pub unsafe fn unchecked_channel(&self, channel: usize) -> SpuChannel<'a> {
         unsafe {
             SpuChannel {
-                regs: &mut (*SPU_CHANNEL_REGS.wrapping_add(channel as usize)),
+                regs: &mut (*SPU_CHANNEL_REGS.wrapping_add(channel)),
                 num: channel,
             }
         }
@@ -279,7 +292,7 @@ impl Spu {
 
     /// Gets a specific channel from the SPU. If the channel number is not in range of the amount
     /// of channels that the SPU has, it'll return [`None`].
-    pub fn channel(&self, channel: usize) -> Option<SpuChannel> {
+    pub fn channel(&self, channel: usize) -> Option<SpuChannel<'a>> {
         if channel < SPU_CHANNELS {
             Some(unsafe { self.unchecked_channel(channel) })
         } else {
@@ -287,6 +300,7 @@ impl Spu {
         }
     }
 
+    /// Returns an iterator over the SPU's channels.
     pub fn channels(&self) -> ChannelIterator {
         ChannelIterator {
             spu: self,

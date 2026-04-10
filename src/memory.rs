@@ -11,14 +11,14 @@ impl VolatileU16 {
     }
 
     #[inline]
-    pub fn set(&self, value: u16) {
+    pub fn set(&mut self, value: u16) {
         unsafe {
             core::ptr::write_volatile(addr_of_mut!(self.value), value);
         }
     }
 
     #[inline]
-    pub fn set_bit(&self, index: u16, value: bool) {
+    pub fn set_bit(&mut self, index: u16, value: bool) {
         self.set(self.get() | (if value { 1 } else { 0 }) << index);
     }
 
@@ -47,7 +47,7 @@ impl VolatileU32 {
     }
 
     #[inline]
-    pub fn set(&self, value: u32) {
+    pub fn set(&mut self, value: u32) {
         unsafe {
             core::ptr::write_volatile(addr_of_mut!(self.low), value as u16);
             core::ptr::write_volatile(addr_of_mut!(self.high), value.unbounded_shr(16) as u16);
@@ -55,7 +55,7 @@ impl VolatileU32 {
     }
 
     #[inline]
-    pub fn set_bit(&self, index: u16, value: bool) {
+    pub fn set_bit(&mut self, index: u16, value: bool) {
         self.set(self.get() | (if value { 1 } else { 0 }) << index);
     }
 
