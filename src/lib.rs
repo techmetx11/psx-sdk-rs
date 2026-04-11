@@ -142,12 +142,12 @@ struct SpuChannelRegs {
 }
 
 /// Reference to a SPU channel.
-pub struct SpuChannel<'a> {
-    regs: &'a mut SpuChannelRegs,
+pub struct SpuChannel {
+    regs: *mut SpuChannelRegs,
     num: usize,
 }
 
-impl<'a> SpuChannel<'a> {
+impl SpuChannel {
     /// Resets a channel
     pub fn reset(&mut self) {
         self.frequency(0);
@@ -162,14 +162,18 @@ impl<'a> SpuChannel<'a> {
     pub fn volume_left(&mut self, vol: Volume) {
         let vol_bits: u16 = vol.into();
 
-        self.regs.volume_left.set(vol_bits);
+        unsafe {
+            (*self.regs).volume_left.set(vol_bits);
+        }
     }
 
     /// Sets the right volume of a channel.
     pub fn volume_right(&mut self, vol: Volume) {
         let vol_bits: u16 = vol.into();
 
-        self.regs.volume_right.set(vol_bits);
+        unsafe {
+            (*self.regs).volume_right.set(vol_bits);
+        }
     }
 
     /// Sets the volume (both left/right) of a channel.
@@ -188,7 +192,11 @@ impl<'a> SpuChannel<'a> {
         }
 
         // In the SPU, samples are indexed by 8-byte units.
-        self.regs.sample_start.set(sample.unbounded_shr(3) as u16);
+        unsafe {
+            (*self.regs)
+                .sample_start
+                .set(sample.unbounded_shr(3) as u16);
+        }
     }
 
     /// Sets the ADPCM sample rate of the channel to the specified frequency (0x1000 == 441000Hz).
@@ -196,7 +204,9 @@ impl<'a> SpuChannel<'a> {
     /// Note: This does not affect the frequency of the channel if noise mode is active on it. For
     /// that, you should check out [`Self::noise_settings`]
     pub fn frequency(&mut self, frequency: u16) {
-        self.regs.frequency.set(frequency);
+        unsafe {
+            (*self.regs).frequency.set(frequency);
+        }
     }
 
     /// Starts the ADSR envelope and automatically initializes the ADSR volume to zero
@@ -243,7 +253,7 @@ pub struct ChannelIterator<'a> {
 }
 
 impl<'a> Iterator for ChannelIterator<'a> {
-    type Item = SpuChannel<'a>;
+    type Item = SpuChannel;
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(num) = self.channels.next() {
             // SAFETY: The channel iterator is always initialized from [`Spu::channels()`], with
@@ -260,8 +270,8 @@ impl<'a> ExactSizeIterator for ChannelIterator<'a> {
     }
 }
 
-impl<'a> Spu {
-    /// Initializes the SPU to default values and returns a [`Spu`] structure.
+impl Spu {
+    /// Initializes the SPU to default values, and returns a [`Spu`] structure.
     pub fn new() -> Self {
         let spu = Spu;
 
@@ -281,7 +291,7 @@ impl<'a> Spu {
     ///
     /// Calling this method with non-existent channel number is *undefined behavior*. You must make
     /// sure that the channel is within the range of the channels that the SPU has.
-    pub unsafe fn unchecked_channel(&self, channel: usize) -> SpuChannel<'a> {
+    pub unsafe fn unchecked_channel(&self, channel: usize) -> SpuChannel {
         unsafe {
             SpuChannel {
                 regs: &mut (*SPU_CHANNEL_REGS.wrapping_add(channel)),
@@ -292,7 +302,7 @@ impl<'a> Spu {
 
     /// Gets a specific channel from the SPU. If the channel number is not in range of the amount
     /// of channels that the SPU has, it'll return [`None`].
-    pub fn channel(&self, channel: usize) -> Option<SpuChannel<'a>> {
+    pub fn channel(&self, channel: usize) -> Option<SpuChannel> {
         if channel < SPU_CHANNELS {
             Some(unsafe { self.unchecked_channel(channel) })
         } else {
@@ -301,7 +311,7 @@ impl<'a> Spu {
     }
 
     /// Returns an iterator over the SPU's channels.
-    pub fn channels(&self) -> ChannelIterator {
+    pub fn channels(&self) -> ChannelIterator<'_> {
         ChannelIterator {
             spu: self,
             channels: (0..SPU_CHANNELS),
@@ -356,6 +366,7 @@ impl<'a> Spu {
             while (*SPU_STAT).ram_transfer() != mode_val {}
         }
     }
+
     fn set_transfer_mode(&self, mode: SpuTransferMode) {
         unsafe {
             match mode {
