@@ -3,6 +3,7 @@ name = "psx-spu"
 readme = "README.md"
 version = "0.1.0"
 edition = "2024"
+description = "Low-level hardware binding crate to the PlayStation 1's Sound Processing Unit (SPU)"
 license = "Apache-2.0"
 authors = ["techmetx11 <techmetx11@disroot.org>"]
 keywords = ["playstation", "no_std", "audio"]
