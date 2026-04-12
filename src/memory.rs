@@ -24,11 +24,7 @@ impl VolatileU16 {
 
     #[inline]
     pub fn get_bit(&self, index: u16) -> bool {
-        if (self.get() & 1 << index) != 0 {
-            true
-        } else {
-            false
-        }
+        (self.get() & (1 << index)) != 0
     }
 }
 
@@ -61,10 +57,6 @@ impl VolatileU32 {
 
     #[inline]
     pub fn get_bit(&self, index: u16) -> bool {
-        if (self.get() & 1 << index) != 0 {
-            true
-        } else {
-            false
-        }
+        (self.get() & (1 << index)) != 0
     }
 }

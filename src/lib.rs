@@ -9,7 +9,7 @@ use crate::{
     memory::{VolatileU16, VolatileU32},
     volume::Volume,
 };
-use core::ops::Range;
+use core::{hint::black_box, ops::Range};
 use paste::paste;
 
 // This crate is potentially unsafe in other platforms, So we have to stop the compilation if we
@@ -27,6 +27,7 @@ const SPU_KEYON: *mut VolatileU32 = 0x1F80_1D88 as *mut VolatileU32;
 const SPU_KEYOFF: *mut VolatileU32 = 0x1F80_1D8C as *mut VolatileU32;
 const SPU_NON: *mut VolatileU32 = 0x1F80_1D94 as *mut VolatileU32;
 const SPU_PMON: *mut VolatileU32 = 0x1F80_1D90 as *mut VolatileU32;
+const SPU_EON: *mut VolatileU32 = 0x1F80_1D98 as *mut VolatileU32;
 
 const SPU_TRANSADDR: *mut VolatileU16 = 0x1F80_1DA6 as *mut VolatileU16;
 const SPU_FIFO: *mut VolatileU16 = 0x1F80_1DA8 as *mut VolatileU16;
@@ -156,6 +157,7 @@ impl SpuChannel {
         self.key_off();
         self.pitch_mod(false);
         self.noise(false);
+        self.reverb(false);
     }
 
     /// Sets the left volume of a channel.
@@ -242,6 +244,13 @@ impl SpuChannel {
     pub fn pitch_mod(&self, enable: bool) {
         unsafe {
             (*SPU_PMON).set_bit(self.num as u16, enable);
+        }
+    }
+
+    /// Enables or disables reverb in the specified channel.
+    pub fn reverb(&self, enable: bool) {
+        unsafe {
+            (*SPU_EON).set_bit(self.num as u16, enable);
         }
     }
 }
@@ -389,17 +398,21 @@ impl Spu {
     ///
     /// Note: The SPU RAM is only addressable by 8-byte chunks, so the right-most 3 bits will be
     /// ignored.
-    pub fn write_cpu(&self, address: u32, data: &[u16]) {
+    pub fn write_cpu(&self, mut address: u32, data: &[u16]) {
         // Set the SPU transfer mode to normal.
         self.set_transfer_mode(SpuTransferMode::Normal);
 
         // Set the RAM transfer mode to "Stop" in SPUCNT
         self.set_ram_transfer(SpuRamTransfer::Stop);
-
-        // Set the address to transfer data to.
-        self.set_transfer_address(address);
-
+        //unsafe {
+        //    (*SPU_CNT).disable_dma_request();
+        //}
         for chunk in data.chunks(32) {
+            // Set the address to transfer data to.
+            self.set_transfer_address(address);
+
+            address += chunk.len() as u32 * 2;
+
             // Send each half-word to the SPU's FIFO (the FIFO only has space for 32.)
             for word in chunk {
                 unsafe {
@@ -412,6 +425,11 @@ impl Spu {
 
             // Wait for the Transfer Busy flag to go off.
             unsafe { while (*SPU_STAT).transfer_busy() {} }
+
+            // The additional delay is required for multi-block transfers according to nocash's docs
+            for i in 0..1000 {
+                black_box(i);
+            }
         }
     }
 }
