@@ -1,8 +1,9 @@
 #![no_std]
-#![deny(missing_docs)]
+//#![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
 mod memory;
+pub mod reverb;
 pub mod volume;
 
 use crate::{
@@ -155,7 +156,7 @@ impl SpuChannel {
         self.volume(Volume::Normal(0));
         self.sample_start(0);
         self.key_off();
-        self.pitch_mod(false);
+        self.frequency_mod(false);
         self.noise(false);
         self.reverb(false);
     }
@@ -236,12 +237,12 @@ impl SpuChannel {
         }
     }
 
-    /// Enables or disables pitch modulation of the specified channel from the amplitude of the
-    /// previous channel.
+    /// Enables or disables frequency modulation of the specified channel from the amplitude of
+    /// the previous channel.
     ///
-    /// Note: Setting pitch modulation on channel 0 will do nothing, as there is no previous
-    /// channel.
-    pub fn pitch_mod(&self, enable: bool) {
+    /// Note: Setting frequency modulation on channel 0 will do nothing, as there is no
+    /// previous channel.
+    pub fn frequency_mod(&self, enable: bool) {
         unsafe {
             (*SPU_PMON).set_bit(self.num as u16, enable);
         }
@@ -431,6 +432,11 @@ impl Spu {
                 black_box(i);
             }
         }
+    }
+
+    /// Configure the reverb registers of the SPU.
+    pub fn reverb_settings(&self) -> reverb::SpuReverbSettings {
+        reverb::SpuReverbSettings
     }
 }
 

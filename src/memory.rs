@@ -1,5 +1,6 @@
 use core::ptr::{addr_of, addr_of_mut};
 
+#[repr(C)]
 pub(crate) struct VolatileU16 {
     value: u16,
 }
@@ -19,7 +20,9 @@ impl VolatileU16 {
 
     #[inline]
     pub fn set_bit(&mut self, index: u16, value: bool) {
-        self.set(self.get() | (if value { 1 } else { 0 }) << index);
+        let bit = if value { 1 } else { 0 } << index;
+
+        self.set((self.get() & !(1 << index)) | bit);
     }
 
     #[inline]
@@ -28,6 +31,7 @@ impl VolatileU16 {
     }
 }
 
+#[repr(C)]
 pub(crate) struct VolatileU32 {
     low: u16,
     high: u16,
@@ -52,7 +56,9 @@ impl VolatileU32 {
 
     #[inline]
     pub fn set_bit(&mut self, index: u16, value: bool) {
-        self.set(self.get() | (if value { 1 } else { 0 }) << index);
+        let bit = if value { 1 } else { 0 } << index;
+
+        self.set((self.get() & !(1 << index)) | bit);
     }
 
     #[inline]
