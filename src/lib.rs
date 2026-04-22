@@ -42,6 +42,25 @@ const SPU_MVOLR: *mut VolatileU16 = 0x1F80_1D82 as *mut VolatileU16;
 /// The SPU structure.
 pub struct Spu;
 
+static mut SPU_GUARD: SpuGuard = SpuGuard { spu: Some(Spu) };
+
+/// SPU handle guard.
+struct SpuGuard {
+    spu: Option<Spu>,
+}
+
+impl SpuGuard {
+    fn get(&mut self) -> Spu {
+        let spu = self.spu.take();
+
+        spu.unwrap()
+    }
+
+    fn reset(&mut self) {
+        self.spu = Some(Spu)
+    }
+}
+
 #[repr(u8)]
 enum SpuRamTransfer {
     Stop = 0,
@@ -281,18 +300,26 @@ impl<'a> ExactSizeIterator for ChannelIterator<'a> {
 }
 
 impl Spu {
-    /// Initializes the SPU to default values, and returns a [`Spu`] structure.
-    pub fn new() -> Self {
-        let spu = Spu;
+    /// Initializes the SPU to default values
+    pub fn reset(&mut self) {
+        self.noise_settings(0, 0);
+        self.main_volume(Volume::Normal(0x3FFF));
 
-        spu.noise_settings(0, 0);
-        spu.main_volume(Volume::Normal(0x3FFF));
-
-        spu.channels().for_each(|mut channel| {
+        self.channels().for_each(|mut channel| {
             channel.reset();
         });
+    }
 
-        spu
+    /// Fetches a handle to the SPU structure. This function will panic if the SPU was already
+    /// occupied at the time.
+    pub fn get() -> Self {
+        #[allow(
+            static_mut_refs,
+            reason = "No mutable reference to the SPU guard structure is given to the user."
+        )]
+        unsafe {
+            SPU_GUARD.get()
+        }
     }
 
     /// Gets a specific channel from the SPu without checking bounds.
@@ -440,8 +467,14 @@ impl Spu {
     }
 }
 
-impl Default for Spu {
-    fn default() -> Self {
-        Self::new()
+impl Drop for Spu {
+    fn drop(&mut self) {
+        #[allow(
+            static_mut_refs,
+            reason = "This is a singleton. reset() will not be called more than once at a time."
+        )]
+        unsafe {
+            SPU_GUARD.reset()
+        }
     }
 }
