@@ -10,6 +10,7 @@ pub mod fs;
 pub mod gamepad;
 pub mod heap;
 pub mod kernel;
+pub mod patch;
 pub mod rng;
 pub mod tty;
 
