@@ -23,6 +23,9 @@ pub struct Gamepad<'a> {
     _buf: PhantomData<&'a mut [u32; BUFFER_SIZE]>,
 }
 
+/// This boolean is used to ensure that there's only one Gamepad at a time.
+static mut GAMEPAD_TAKEN: bool = false;
+
 /// The reading from polling the gamepad buttons
 pub struct Buttons {
     value: u16,
@@ -100,16 +103,16 @@ pub mod buttons {
 }
 
 impl<'a> Gamepad<'a> {
-    // TODO: Calling this twice is not ok. Getting two `Gamepad`s may be ok with
-    // tweaks to its definition since there's really only one writer (i.e. the
-    // BIOS). However calling `new` twice is not ok because it will initialize the
-    // static buffers twice. I should make this function actually safe wrt this
-    // issue, by keeping track of the calls to init_pad/stop_pad.
     /// Creates a new gamepad from a reference to a static buffer.
     ///
     /// Note that the buffer is embedded in the executable. To use a temporary
     /// buffer (e.g. to minimize executable size) use `Gamepad::new_with_buffer`
     /// directly.
+    ///
+    /// # PANICS
+    ///
+    /// If this function is called while there's already a gamepad that hasn't
+    /// been dropped, then this function will panic.
     #[expect(
         clippy::new_without_default,
         reason = "new implementation not currently safe, Default would encourage its use"
@@ -130,6 +133,11 @@ impl<'a> Gamepad<'a> {
     /// reference to a `MaybeUninit::uninit()` and the buffer's size will be
     /// inferred.
     ///
+    /// # PANICS
+    ///
+    /// If this function is called while there's already a gamepad that hasn't
+    /// been dropped, then this function will panic.
+    ///
     /// # SAFETY
     ///
     /// Since the buffer passed to the BIOS may be dynamic, the BIOS must stop
@@ -147,6 +155,11 @@ impl<'a> Gamepad<'a> {
 
     /// Creates a new gamepad from a pointer to a buffer.
     ///
+    /// # PANICS
+    ///
+    /// If this function is called while there's already a gamepad that hasn't
+    /// been dropped, then this function will panic.
+    ///
     /// # SAFETY
     ///
     /// The provided buffers must be valid for the entire lifetime 'a.
@@ -158,6 +171,14 @@ impl<'a> Gamepad<'a> {
     unsafe fn new_with_buffer_ptr(
         buf1: *mut MaybeUninit<[u32; BUFFER_SIZE]>, buf2: *mut MaybeUninit<[u32; BUFFER_SIZE]>,
     ) -> Self {
+        if GAMEPAD_TAKEN {
+            panic!(
+                "Gamepad's constructor was called while there's already an existing Gamepad handle."
+            );
+        } else {
+            GAMEPAD_TAKEN = true;
+        }
+
         let buf1 = buf1.cast::<u16>();
         let buf2 = buf2.cast::<u16>();
         kernel::psx_init_pad(buf1 as *mut u8, 0x22, buf2 as *mut u8, 0x22);
@@ -223,6 +244,7 @@ impl<'a> Drop for Gamepad<'a> {
     fn drop(&mut self) {
         unsafe {
             kernel::psx_stop_pad();
+            GAMEPAD_TAKEN = false;
         }
     }
 }
