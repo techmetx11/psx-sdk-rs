@@ -36,7 +36,6 @@ pub(crate) unsafe fn send_pad_output() -> PadOutputFunction {
     // Get the pointer to the pad output function.
     let pad_output_func: PadOutputFunction =
         core::mem::transmute(unsafe { chgclearpad_func.byte_add(PAD_OUTPUT_OFFSET) });
-    println!("Pad output function: {:#x?}", pad_output_func);
 
     // Patch a couple parts of the code related to the `readPad` function.
     for code in NEW_CODE {
