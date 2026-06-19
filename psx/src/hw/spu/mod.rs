@@ -1,24 +1,11 @@
-#![no_std]
-//#![deny(missing_docs)]
-#![doc = include_str!("../README.md")]
-
 mod memory;
 pub mod reverb;
 pub mod volume;
 
-use crate::{
-    memory::{VolatileU16, VolatileU32},
-    volume::Volume,
-};
+use crate::{memory::{VolatileU16, VolatileU32},
+            volume::Volume};
 use core::{hint::black_box, ops::Range};
 use paste::paste;
-
-// This crate is potentially unsafe in other platforms, So we have to stop the compilation if we
-// detect that the compiler is not targetting the PS1
-#[cfg(not(target_os = "psx"))]
-compile_error!(
-    "This crate is meant to be compiled for the PlayStation 1, and cannot be used anywhere else."
-);
 
 const SPU_CHANNELS: usize = 24;
 
@@ -206,8 +193,8 @@ impl SpuChannel {
 
     /// Sets the address of the sample the channel should be playing off of.
     ///
-    /// Note: The SPU RAM is only addressable by 8-byte chunks, so the right-most 3 bits will be
-    /// ignored.
+    /// Note: The SPU RAM is only addressable by 8-byte chunks, so the
+    /// right-most 3 bits will be ignored.
     pub fn sample_start(&mut self, sample: u32) {
         if sample > 1 << 19 {
             panic!("Sample address is bigger than the maximum addressable address in the SPU");
@@ -221,46 +208,51 @@ impl SpuChannel {
         }
     }
 
-    /// Sets the ADPCM sample rate of the channel to the specified frequency (0x1000 == 441000Hz).
+    /// Sets the ADPCM sample rate of the channel to the specified frequency
+    /// (0x1000 == 441000Hz).
     ///
-    /// Note: This does not affect the frequency of the channel if noise mode is active on it. For
-    /// that, you should check out [`Self::noise_settings`]
+    /// Note: This does not affect the frequency of the channel if noise mode is
+    /// active on it. For that, you should check out
+    /// [`Self::noise_settings`]
     pub fn frequency(&mut self, frequency: u16) {
         unsafe {
             (*self.regs).frequency.set(frequency);
         }
     }
 
-    /// Starts the ADSR envelope and automatically initializes the ADSR volume to zero
+    /// Starts the ADSR envelope and automatically initializes the ADSR volume
+    /// to zero
     pub fn key_on(&self) {
         unsafe {
             (*SPU_KEYON).set_bit(self.num as u16, true);
         }
     }
 
-    /// Releases the key in the channel, which starts the Release stage of the ADSR envelope, if
-    /// set.
+    /// Releases the key in the channel, which starts the Release stage of the
+    /// ADSR envelope, if set.
     pub fn key_off(&self) {
         unsafe {
             (*SPU_KEYOFF).set_bit(self.num as u16, true);
         }
     }
 
-    /// Enable or disable noise mode on a specific channel. If enabled, the channel will stop
-    /// outputting ADPCM samples and instead output noise samples from the SPU's Noise Generator.
+    /// Enable or disable noise mode on a specific channel. If enabled, the
+    /// channel will stop outputting ADPCM samples and instead output noise
+    /// samples from the SPU's Noise Generator.
     ///
-    /// The Noise Generator can be configured, using the [`Self::noise_settings`] function.
+    /// The Noise Generator can be configured, using the
+    /// [`Self::noise_settings`] function.
     pub fn noise(&self, enable: bool) {
         unsafe {
             (*SPU_NON).set_bit(self.num as u16, enable);
         }
     }
 
-    /// Enables or disables frequency modulation of the specified channel from the amplitude of
-    /// the previous channel.
+    /// Enables or disables frequency modulation of the specified channel from
+    /// the amplitude of the previous channel.
     ///
-    /// Note: Setting frequency modulation on channel 0 will do nothing, as there is no
-    /// previous channel.
+    /// Note: Setting frequency modulation on channel 0 will do nothing, as
+    /// there is no previous channel.
     pub fn frequency_mod(&self, enable: bool) {
         unsafe {
             (*SPU_PMON).set_bit(self.num as u16, enable);
@@ -285,8 +277,8 @@ impl<'a> Iterator for ChannelIterator<'a> {
     type Item = SpuChannel;
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(num) = self.channels.next() {
-            // SAFETY: The channel iterator is always initialized from [`Spu::channels()`], with
-            // the range being set from 0 to [`SPU_CHANNELS`]
+            // SAFETY: The channel iterator is always initialized from [`Spu::channels()`],
+            // with the range being set from 0 to [`SPU_CHANNELS`]
             unsafe { Some(self.spu.unchecked_channel(num)) }
         } else {
             None
@@ -310,8 +302,8 @@ impl Spu {
         });
     }
 
-    /// Fetches a handle to the SPU structure. This function will panic if the SPU was already
-    /// occupied at the time.
+    /// Fetches a handle to the SPU structure. This function will panic if the
+    /// SPU was already occupied at the time.
     pub fn get() -> Self {
         #[allow(
             static_mut_refs,
@@ -326,8 +318,9 @@ impl Spu {
     ///
     /// # Safety
     ///
-    /// Calling this method with non-existent channel number is *undefined behavior*. You must make
-    /// sure that the channel is within the range of the channels that the SPU has.
+    /// Calling this method with non-existent channel number is *undefined
+    /// behavior*. You must make sure that the channel is within the range
+    /// of the channels that the SPU has.
     pub unsafe fn unchecked_channel(&self, channel: usize) -> SpuChannel {
         unsafe {
             SpuChannel {
@@ -337,8 +330,9 @@ impl Spu {
         }
     }
 
-    /// Gets a specific channel from the SPU. If the channel number is not in range of the amount
-    /// of channels that the SPU has, it'll return [`None`].
+    /// Gets a specific channel from the SPU. If the channel number is not in
+    /// range of the amount of channels that the SPU has, it'll return
+    /// [`None`].
     pub fn channel(&self, channel: usize) -> Option<SpuChannel> {
         if channel < SPU_CHANNELS {
             Some(unsafe { self.unchecked_channel(channel) })
@@ -379,10 +373,12 @@ impl Spu {
         self.main_volume_right(vol);
     }
 
-    /// Configure the Noise Generator for all channels that have noise mode enabled.
+    /// Configure the Noise Generator for all channels that have noise mode
+    /// enabled.
     ///
-    /// `step` finetunes the frequency of the noise output (by skipping over steps in the timer),
-    /// while `shift` coarsely tunes the frequency (by the shifting the initial value of the timer)
+    /// `step` finetunes the frequency of the noise output (by skipping over
+    /// steps in the timer), while `shift` coarsely tunes the frequency (by
+    /// the shifting the initial value of the timer)
     ///
     /// See [The PlayStation Specifications](https://psx-spx.consoledev.net/soundprocessingunitspu/#spu-noise-generator_1) for more details.
     pub fn noise_settings(&self, shift: usize, step: usize) {
@@ -422,10 +418,11 @@ impl Spu {
         }
     }
 
-    /// Write data to an address in the SPU's RAM, without using the SPU's DMA channel.
+    /// Write data to an address in the SPU's RAM, without using the SPU's DMA
+    /// channel.
     ///
-    /// Note: The SPU RAM is only addressable by 8-byte chunks, so the right-most 3 bits will be
-    /// ignored.
+    /// Note: The SPU RAM is only addressable by 8-byte chunks, so the
+    /// right-most 3 bits will be ignored.
     pub fn write_cpu(&self, mut address: u32, data: &[u16]) {
         // Set the SPU transfer mode to normal.
         self.set_transfer_mode(SpuTransferMode::Normal);
@@ -454,7 +451,8 @@ impl Spu {
             // Wait for the Transfer Busy flag to go off.
             unsafe { while (*SPU_STAT).transfer_busy() {} }
 
-            // The additional delay is required for multi-block transfers according to nocash's docs
+            // The additional delay is required for multi-block transfers according to
+            // nocash's docs
             for i in 0..1000 {
                 black_box(i);
             }
