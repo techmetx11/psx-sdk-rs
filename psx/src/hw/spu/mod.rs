@@ -2,10 +2,9 @@ mod memory;
 pub mod reverb;
 pub mod volume;
 
-use crate::{memory::{VolatileU16, VolatileU32},
-            volume::Volume};
 use core::{hint::black_box, ops::Range};
-use paste::paste;
+
+use crate::hw::spu::memory::{VolatileU16, VolatileU32};
 
 const SPU_CHANNELS: usize = 24;
 
@@ -28,25 +27,6 @@ const SPU_MVOLR: *mut VolatileU16 = 0x1F80_1D82 as *mut VolatileU16;
 
 /// The SPU structure.
 pub struct Spu;
-
-static mut SPU_GUARD: SpuGuard = SpuGuard { spu: Some(Spu) };
-
-/// SPU handle guard.
-struct SpuGuard {
-    spu: Option<Spu>,
-}
-
-impl SpuGuard {
-    fn get(&mut self) -> Spu {
-        let spu = self.spu.take();
-
-        spu.unwrap()
-    }
-
-    fn reset(&mut self) {
-        self.spu = Some(Spu)
-    }
-}
 
 #[repr(u8)]
 enum SpuRamTransfer {
@@ -302,16 +282,9 @@ impl Spu {
         });
     }
 
-    /// Fetches a handle to the SPU structure. This function will panic if the
-    /// SPU was already occupied at the time.
-    pub fn get() -> Self {
-        #[allow(
-            static_mut_refs,
-            reason = "No mutable reference to the SPU guard structure is given to the user."
-        )]
-        unsafe {
-            SPU_GUARD.get()
-        }
+    /// Creates a new handle to the SPU structure.
+    pub fn new() -> Self {
+        Spu
     }
 
     /// Gets a specific channel from the SPu without checking bounds.
@@ -462,17 +435,5 @@ impl Spu {
     /// Configure the reverb registers of the SPU.
     pub fn reverb_settings(&self) -> reverb::SpuReverbSettings {
         reverb::SpuReverbSettings
-    }
-}
-
-impl Drop for Spu {
-    fn drop(&mut self) {
-        #[allow(
-            static_mut_refs,
-            reason = "This is a singleton. reset() will not be called more than once at a time."
-        )]
-        unsafe {
-            SPU_GUARD.reset()
-        }
     }
 }
