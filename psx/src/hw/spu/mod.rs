@@ -1,7 +1,8 @@
-mod memory;
 pub mod reverb;
 pub mod volume;
 
+use crate::hw::spu::reverb::{ReverbOutVolumeLeft, ReverbOutVolumeRight, ReverbWorkArea};
+use crate::hw::spu::volume::Volume;
 use core::{hint::black_box, ops::Range};
 
 use crate::hw::mmio::{MemRegister, SplitU32MemRegister};
@@ -132,7 +133,7 @@ impl SpuChannel {
     /// Resets a channel
     pub fn reset(&mut self) {
         self.frequency(0);
-        self.volume(Volume::Normal(0));
+        self.volume(&Volume::Normal(0));
         self.sample_start(0);
         self.key_off();
         self.frequency_mod(false);
@@ -141,7 +142,7 @@ impl SpuChannel {
     }
 
     /// Sets the left volume of a channel.
-    pub fn volume_left(&mut self, vol: Volume) {
+    pub fn volume_left(&mut self, vol: &Volume) {
         let vol_bits: u16 = vol.into();
 
         unsafe {
@@ -150,7 +151,7 @@ impl SpuChannel {
     }
 
     /// Sets the right volume of a channel.
-    pub fn volume_right(&mut self, vol: Volume) {
+    pub fn volume_right(&mut self, vol: &Volume) {
         let vol_bits: u16 = vol.into();
 
         unsafe {
@@ -159,7 +160,7 @@ impl SpuChannel {
     }
 
     /// Sets the volume (both left/right) of a channel.
-    pub fn volume(&mut self, vol: Volume) {
+    pub fn volume(&mut self, vol: &Volume) {
         self.volume_left(vol);
         self.volume_right(vol);
     }
@@ -265,7 +266,7 @@ impl Spu {
     /// Initializes the SPU to default values
     pub fn reset(&mut self) {
         self.noise_settings(0, 0);
-        self.main_volume(Volume::Normal(0x3FFF));
+        self.main_volume(&Volume::Normal(0x3FFF));
 
         self.channels().for_each(|mut channel| {
             channel.reset();
@@ -313,25 +314,21 @@ impl Spu {
     }
 
     /// Sets the SPU's main left volume.
-    pub fn main_volume_left(&self, vol: Volume) {
+    pub fn main_volume_left(&self, vol: &Volume) {
         let vol_bits: u16 = vol.into();
 
-        unsafe {
-            MainVolLeft::skip_load().assign(vol_bits).store();
-        }
+        MainVolLeft::skip_load().assign(vol_bits).store();
     }
 
     /// Sets the SPU's main right volume.
-    pub fn main_volume_right(&self, vol: Volume) {
+    pub fn main_volume_right(&self, vol: &Volume) {
         let vol_bits: u16 = vol.into();
 
-        unsafe {
-            MainVolRight::skip_load().assign(vol_bits).store();
-        }
+        MainVolRight::skip_load().assign(vol_bits).store();
     }
 
     /// Sets the SPU's main volume.
-    pub fn main_volume(&self, vol: Volume) {
+    pub fn main_volume(&self, vol: &Volume) {
         self.main_volume_left(vol);
         self.main_volume_right(vol);
     }
@@ -428,7 +425,11 @@ impl Spu {
     }
 
     /// Configure the reverb registers of the SPU.
-    pub fn reverb_settings(&self) -> reverb::SpuReverbSettings {
-        reverb::SpuReverbSettings
+    pub fn reverb(&self) -> reverb::SpuReverb {
+        reverb::SpuReverb {
+            out_volume_left: ReverbOutVolumeLeft::new(),
+            out_volume_right: ReverbOutVolumeRight::new(),
+            work_ram: ReverbWorkArea::new(),
+        }
     }
 }
