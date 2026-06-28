@@ -1,31 +1,44 @@
-/// SPU reverb module.
+//! SPU reverb module.
 use crate::hw::mmio::MemRegister;
 use crate::hw::Register;
 
 pub(crate) type ReverbOutVolumeLeft = MemRegister<i16, 0x1F80_1D84>;
 pub(crate) type ReverbOutVolumeRight = MemRegister<i16, 0x1F80_1D86>;
-pub(crate) type ReverbWorkArea = MemRegister<u16, 0x1F80_1DA2>;
+pub(crate) type ReverbBaseAddress = MemRegister<u16, 0x1F80_1DA2>;
 
 /// The SPU's reverb structure.
 pub struct SpuReverb {
     pub(crate) out_volume_left: ReverbOutVolumeLeft,
     pub(crate) out_volume_right: ReverbOutVolumeRight,
-    pub(crate) work_ram: ReverbWorkArea,
+    pub(crate) base_address: ReverbBaseAddress,
 }
 
 impl SpuReverb {
+    /// Set the volume for the output left channel of the reverb.
     pub fn volume_left(&mut self, volume: i16) {
         self.out_volume_left.assign(volume).store();
     }
 
+    /// Set the volume for the output right channel of the reverb.
     pub fn volume_right(&mut self, volume: i16) {
         self.out_volume_right.assign(volume).store();
     }
 
-    pub fn work_ram_addr(&mut self, address: u16) {
-        self.work_ram.assign(address).store();
+    /// Set the volume for both left/right output channels of the reverb.
+    pub fn volume(&mut self, volume: i16) {
+        self.volume_right(volume);
+        self.volume_left(volume);
     }
 
+    /// Set the base address within the SPU's RAM for the hardware reverb to
+    /// use.
+    pub fn base_addr(&mut self, address: u16) {
+        self.base_address.assign(address).store();
+    }
+
+    /// Set the reverb register settings, from the first APF offset register
+    /// (dAPF1) to the input right volume for the reverg (vRIN), which is
+    /// about 32 16-bit registers.
     pub fn config(&mut self, config: &[u16; 0x1F]) {
         const SPU_REVERB_SETTINGS: *mut u16 = 0x1F80_1DC0 as _;
 

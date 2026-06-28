@@ -1,7 +1,7 @@
 pub mod reverb;
 pub mod volume;
 
-use crate::hw::spu::reverb::{ReverbOutVolumeLeft, ReverbOutVolumeRight, ReverbWorkArea};
+use crate::hw::spu::reverb::{ReverbBaseAddress, ReverbOutVolumeLeft, ReverbOutVolumeRight};
 use crate::hw::spu::volume::Volume;
 use core::{hint::black_box, ops::Range};
 
@@ -57,22 +57,22 @@ enum SpuTransferMode {
 
 macro_rules! define_bit {
     ($name:ident, $set_name:ident, $bit:literal) => {
-        pub fn $name(&self) -> bool {
+        fn $name(&self) -> bool {
             self.all_set(1 << $bit)
         }
 
-        pub fn $set_name(&mut self, value: bool) -> &mut Self {
+        fn $set_name(&mut self, value: bool) -> &mut Self {
             self.clear_bits((value as u16) << $bit);
             self.set_bits((value as u16) << $bit);
             self
         }
     };
     ($name:ident, $set_name:ident, $mask:literal, $shift:literal) => {
-        pub fn $name(&self) -> u16 {
+        fn $name(&self) -> u16 {
             (self.to_bits() >> $shift) & $mask
         }
 
-        pub fn $set_name(&mut self, value: u16) -> &mut Self {
+        fn $set_name(&mut self, value: u16) -> &mut Self {
             self.clear_bits($mask << $shift);
             self.set_bits(value << $shift);
             self
@@ -429,7 +429,7 @@ impl Spu {
         reverb::SpuReverb {
             out_volume_left: ReverbOutVolumeLeft::new(),
             out_volume_right: ReverbOutVolumeRight::new(),
-            work_ram: ReverbWorkArea::new(),
+            base_address: ReverbBaseAddress::new(),
         }
     }
 }
