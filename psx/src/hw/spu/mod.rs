@@ -1,6 +1,7 @@
 pub mod reverb;
 pub mod volume;
 
+use crate::dma::SPU;
 use crate::hw::spu::reverb::{ReverbBaseAddress, ReverbOutVolumeLeft, ReverbOutVolumeRight};
 use crate::hw::spu::volume::Volume;
 use core::{hint::black_box, ops::Range};
@@ -314,21 +315,21 @@ impl Spu {
     }
 
     /// Sets the SPU's main left volume.
-    pub fn main_volume_left(&self, vol: &Volume) {
+    pub fn main_volume_left(&mut self, vol: &Volume) {
         let vol_bits: u16 = vol.into();
 
         MainVolLeft::skip_load().assign(vol_bits).store();
     }
 
     /// Sets the SPU's main right volume.
-    pub fn main_volume_right(&self, vol: &Volume) {
+    pub fn main_volume_right(&mut self, vol: &Volume) {
         let vol_bits: u16 = vol.into();
 
         MainVolRight::skip_load().assign(vol_bits).store();
     }
 
     /// Sets the SPU's main volume.
-    pub fn main_volume(&self, vol: &Volume) {
+    pub fn main_volume(&mut self, vol: &Volume) {
         self.main_volume_left(vol);
         self.main_volume_right(vol);
     }
@@ -341,7 +342,7 @@ impl Spu {
     /// the shifting the initial value of the timer)
     ///
     /// See [The PlayStation Specifications](https://psx-spx.consoledev.net/soundprocessingunitspu/#spu-noise-generator_1) for more details.
-    pub fn noise_settings(&self, shift: usize, step: usize) {
+    pub fn noise_settings(&mut self, shift: usize, step: usize) {
         let mut control = Control::new();
         control
             .set_noise_freq_shift(shift as u16)
@@ -349,7 +350,7 @@ impl Spu {
             .store();
     }
 
-    fn set_ram_transfer(&self, mode: SpuRamTransfer) {
+    fn set_ram_transfer(&mut self, mode: SpuRamTransfer) {
         let mode_val: u16 = mode.into();
         let mut control = Control::new();
         let mut status = Status::skip_load();
@@ -361,7 +362,7 @@ impl Spu {
         while status.load().ram_transfer() != mode_val {}
     }
 
-    fn set_transfer_mode(&self, mode: SpuTransferMode) {
+    fn set_transfer_mode(&mut self, mode: SpuTransferMode) {
         let mut trans_cnt = TransControl::skip_load();
         match mode {
             SpuTransferMode::Fill => trans_cnt.assign(0),
@@ -373,7 +374,7 @@ impl Spu {
         .store();
     }
 
-    fn set_transfer_address(&self, address: u32) {
+    fn set_transfer_address(&mut self, address: u32) {
         TransAddr::skip_load()
             .assign(address.unbounded_shr(3) as u16)
             .store();
@@ -384,7 +385,7 @@ impl Spu {
     ///
     /// Note: The SPU RAM is only addressable by 8-byte chunks, so the
     /// right-most 3 address bits will be ignored.
-    pub fn write_cpu(&self, mut address: u32, data: &[u16]) {
+    pub fn write_cpu(&mut self, mut address: u32, data: &[u16]) {
         const SPU_FIFO: *mut u16 = 0x1F80_1DA8 as _;
 
         // Set the SPU transfer mode to normal.
@@ -392,9 +393,7 @@ impl Spu {
 
         // Set the RAM transfer mode to "Stop" in SPUCNT
         self.set_ram_transfer(SpuRamTransfer::Stop);
-        //unsafe {
-        //    (*SPU_CNT).disable_dma_request();
-        //}
+
         for chunk in data.chunks(32) {
             // Set the address to transfer data to.
             self.set_transfer_address(address);
@@ -422,6 +421,28 @@ impl Spu {
                 black_box(i);
             }
         }
+    }
+
+    /// Initialize a DMA write operation to an address in the SPU's RAM.
+    ///
+    /// Note: The SPU RAM is only addressable by 8-byte chunks, so the
+    /// right-most 3 address bits will be ignored.
+    pub fn write_dma(&mut self, address: u32) -> SPU {
+        // Set the SPU transfer mode to normal.
+        self.set_transfer_mode(SpuTransferMode::Normal);
+
+        // Set the RAM transfer mode to "Stop" in SPUCNT
+        self.set_ram_transfer(SpuRamTransfer::Stop);
+
+        // Set the address to transfer data to.
+        self.set_transfer_address(address);
+
+        // Set the RAM transfer mode to DMA Write
+        self.set_ram_transfer(SpuRamTransfer::DMAWrite);
+
+        // Now it's up to the user to initiate the transfer over at the CPU-side with
+        // the DMA channel.
+        SPU::new()
     }
 
     /// Configure the reverb registers of the SPU.
