@@ -4,26 +4,25 @@ pub mod volume;
 
 use core::{hint::black_box, ops::Range};
 
-use crate::hw::spu::memory::{VolatileU16, VolatileU32};
-
+use crate::hw::mmio::{MemRegister, SplitU32MemRegister};
+use crate::hw::Register;
 const SPU_CHANNELS: usize = 24;
 
 const SPU_CHANNEL_REGS: *mut SpuChannelRegs = 0x1F80_1C00 as *mut SpuChannelRegs;
 
-const SPU_KEYON: *mut VolatileU32 = 0x1F80_1D88 as *mut VolatileU32;
-const SPU_KEYOFF: *mut VolatileU32 = 0x1F80_1D8C as *mut VolatileU32;
-const SPU_NON: *mut VolatileU32 = 0x1F80_1D94 as *mut VolatileU32;
-const SPU_PMON: *mut VolatileU32 = 0x1F80_1D90 as *mut VolatileU32;
-const SPU_EON: *mut VolatileU32 = 0x1F80_1D98 as *mut VolatileU32;
+type KeyOn = SplitU32MemRegister<0x1F80_1D88>;
+type KeyOff = SplitU32MemRegister<0x1F80_1D8C>;
+type NoiseOn = SplitU32MemRegister<0x1F80_1D94>;
+type FMOn = SplitU32MemRegister<0x1F80_1D90>;
+type EchoOn = SplitU32MemRegister<0x1F80_1D98>;
 
-const SPU_TRANSADDR: *mut VolatileU16 = 0x1F80_1DA6 as *mut VolatileU16;
-const SPU_FIFO: *mut VolatileU16 = 0x1F80_1DA8 as *mut VolatileU16;
-const SPU_CNT: *mut SpuControlRegs = 0x1F80_1DAA as *mut SpuControlRegs;
-const SPU_TRANSCNT: *mut VolatileU16 = 0x1F80_1DAC as *mut VolatileU16;
-const SPU_STAT: *mut SpuStatusRegs = 0x1F80_1DAE as *mut SpuStatusRegs;
+type TransAddr = MemRegister<u16, 0x1F80_1DA6>;
+type Control = MemRegister<u16, 0x1F80_1DAA>;
+type TransControl = MemRegister<u16, 0x1F80_1DAC>;
+type Status = MemRegister<u16, 0x1F80_1DAE>;
 
-const SPU_MVOLL: *mut VolatileU16 = 0x1F80_1D80 as *mut VolatileU16;
-const SPU_MVOLR: *mut VolatileU16 = 0x1F80_1D82 as *mut VolatileU16;
+type MainVolLeft = MemRegister<u16, 0x1F80_1D80>;
+type MainVolRight = MemRegister<u16, 0x1F80_1D82>;
 
 /// The SPU structure.
 pub struct Spu;
@@ -56,83 +55,77 @@ enum SpuTransferMode {
 }
 
 macro_rules! define_bit {
-    ($name:ident, $bit:literal) => {
-        #[inline]
+    ($name:ident, $set_name:ident, $bit:literal) => {
         pub fn $name(&self) -> bool {
-            self.regs.get_bit($bit)
+            self.all_set(1 << $bit)
         }
 
-        #[inline]
-        paste! {
-            pub fn [<set_ $name>](&mut self, value: bool) {
-                self.regs.set_bit($bit, value);
-            }
+        pub fn $set_name(&mut self, value: bool) -> &mut Self {
+            self.clear_bits((value as u16) << $bit);
+            self.set_bits((value as u16) << $bit);
+            self
         }
     };
-    ($name:ident, $mask:literal, $shift:literal) => {
-        #[inline]
+    ($name:ident, $set_name:ident, $mask:literal, $shift:literal) => {
         pub fn $name(&self) -> u16 {
-            (self.regs.get() >> $shift) & $mask
+            (self.to_bits() >> $shift) & $mask
         }
 
-        #[inline]
-        paste! {
-            pub fn [<set_ $name>](&mut self, value: u16) {
-                self.regs.set((self.regs.get() & !$mask) | ((value & $mask) << $shift));
-            }
+        pub fn $set_name(&mut self, value: u16) -> &mut Self {
+            self.clear_bits($mask << $shift);
+            self.set_bits(value << $shift);
+            self
         }
     };
 }
 
-struct SpuControlRegs {
-    regs: VolatileU16,
+impl Control {
+    define_bit!(enable, set_enable, 15);
+    define_bit!(mute, set_mute, 14);
+    define_bit!(noise_freq_shift, set_noise_freq_shift, 0b1111, 10);
+    define_bit!(noise_freq_step, set_noise_freq_step, 0b11, 8);
+    define_bit!(reverb_master, set_reverb_master, 7);
+    define_bit!(irq9, set_irq9, 6);
+
+    define_bit!(ram_transfer, set_ram_transfer, 0b11, 4);
+
+    define_bit!(ext_reverb, set_ext_reverb, 3);
+    define_bit!(cdda_reverb, set_cdda_reverb, 2);
+    define_bit!(ext_enable, set_ext_enable, 1);
+    define_bit!(cdda_enable, set_cdda_enable, 0);
 }
 
-impl SpuControlRegs {
-    define_bit!(enable, 15);
-    define_bit!(mute, 14);
-    define_bit!(noise_freq_shift, 0b1111, 10);
-    define_bit!(noise_freq_step, 0b11, 8);
-    define_bit!(reverb_master, 7);
-    define_bit!(irq9, 6);
-
-    define_bit!(ram_transfer, 0b11, 4);
-
-    define_bit!(ext_reverb, 3);
-    define_bit!(cdda_reverb, 2);
-    define_bit!(ext_enable, 1);
-    define_bit!(cdda_enable, 0);
-}
-
-struct SpuStatusRegs {
-    regs: VolatileU16,
-}
-
-impl SpuStatusRegs {
-    define_bit!(capture_buffer, 11);
-    define_bit!(transfer_busy, 10);
-    define_bit!(dma_read_request, 9);
-    define_bit!(dma_write_request, 8);
-    define_bit!(dma_rw_request, 7);
-    define_bit!(irq9, 6);
-    define_bit!(ram_transfer, 0b11, 4);
+impl Status {
+    define_bit!(capture_buffer, set_capture_buffer, 11);
+    define_bit!(transfer_busy, set_transfer_busy, 10);
+    define_bit!(dma_read_request, set_dma_read_request, 9);
+    define_bit!(dma_write_request, set_dma_write_request, 8);
+    define_bit!(dma_rw_request, set_dma_rw_request, 7);
+    define_bit!(irq9, set_irq9, 6);
+    define_bit!(ram_transfer, set_ram_transfer, 0b11, 4);
 }
 
 #[repr(C)]
 struct SpuChannelRegs {
-    volume_left: VolatileU16,
-    volume_right: VolatileU16,
-    frequency: VolatileU16,
-    sample_start: VolatileU16,
-    adsr: VolatileU32,
-    adsr_volume: VolatileU16,
-    sample_repeat: VolatileU16,
+    volume_left: u16,
+    volume_right: u16,
+    frequency: u16,
+    sample_start: u16,
+    adsr: u32,
+    adsr_volume: u16,
+    sample_repeat: u16,
 }
 
 /// Reference to a SPU channel.
 pub struct SpuChannel {
     regs: *mut SpuChannelRegs,
     num: usize,
+}
+
+macro_rules! set_volatile {
+    ($field:expr, $value:expr) => {
+        (&raw mut $field).write_volatile($value);
+    };
 }
 
 impl SpuChannel {
@@ -152,7 +145,7 @@ impl SpuChannel {
         let vol_bits: u16 = vol.into();
 
         unsafe {
-            (*self.regs).volume_left.set(vol_bits);
+            set_volatile!((*self.regs).volume_left, vol_bits);
         }
     }
 
@@ -161,7 +154,7 @@ impl SpuChannel {
         let vol_bits: u16 = vol.into();
 
         unsafe {
-            (*self.regs).volume_right.set(vol_bits);
+            set_volatile!((*self.regs).volume_right, vol_bits);
         }
     }
 
@@ -182,9 +175,7 @@ impl SpuChannel {
 
         // In the SPU, samples are indexed by 8-byte units.
         unsafe {
-            (*self.regs)
-                .sample_start
-                .set(sample.unbounded_shr(3) as u16);
+            set_volatile!((*self.regs).sample_start, sample.unbounded_shr(3) as u16);
         }
     }
 
@@ -196,24 +187,20 @@ impl SpuChannel {
     /// [`Self::noise_settings`]
     pub fn frequency(&mut self, frequency: u16) {
         unsafe {
-            (*self.regs).frequency.set(frequency);
+            set_volatile!((*self.regs).frequency, frequency);
         }
     }
 
     /// Starts the ADSR envelope and automatically initializes the ADSR volume
     /// to zero
     pub fn key_on(&self) {
-        unsafe {
-            (*SPU_KEYON).set_bit(self.num as u16, true);
-        }
+        KeyOn::new().set_bits(1 << self.num).store();
     }
 
     /// Releases the key in the channel, which starts the Release stage of the
     /// ADSR envelope, if set.
     pub fn key_off(&self) {
-        unsafe {
-            (*SPU_KEYOFF).set_bit(self.num as u16, true);
-        }
+        KeyOff::new().set_bits(1 << self.num).store();
     }
 
     /// Enable or disable noise mode on a specific channel. If enabled, the
@@ -223,9 +210,10 @@ impl SpuChannel {
     /// The Noise Generator can be configured, using the
     /// [`Self::noise_settings`] function.
     pub fn noise(&self, enable: bool) {
-        unsafe {
-            (*SPU_NON).set_bit(self.num as u16, enable);
-        }
+        NoiseOn::new()
+            .clear_bits((enable as u32) << self.num)
+            .set_bits((enable as u32) << self.num)
+            .store();
     }
 
     /// Enables or disables frequency modulation of the specified channel from
@@ -234,16 +222,18 @@ impl SpuChannel {
     /// Note: Setting frequency modulation on channel 0 will do nothing, as
     /// there is no previous channel.
     pub fn frequency_mod(&self, enable: bool) {
-        unsafe {
-            (*SPU_PMON).set_bit(self.num as u16, enable);
-        }
+        FMOn::new()
+            .clear_bits((enable as u32) << self.num)
+            .set_bits((enable as u32) << self.num)
+            .store();
     }
 
     /// Enables or disables reverb in the specified channel.
     pub fn reverb(&self, enable: bool) {
-        unsafe {
-            (*SPU_EON).set_bit(self.num as u16, enable);
-        }
+        EchoOn::new()
+            .clear_bits((enable as u32) << self.num)
+            .set_bits((enable as u32) << self.num)
+            .store();
     }
 }
 
@@ -327,7 +317,7 @@ impl Spu {
         let vol_bits: u16 = vol.into();
 
         unsafe {
-            (*SPU_MVOLL).set(vol_bits);
+            MainVolLeft::skip_load().assign(vol_bits).store();
         }
     }
 
@@ -336,7 +326,7 @@ impl Spu {
         let vol_bits: u16 = vol.into();
 
         unsafe {
-            (*SPU_MVOLR).set(vol_bits);
+            MainVolRight::skip_load().assign(vol_bits).store();
         }
     }
 
@@ -355,48 +345,51 @@ impl Spu {
     ///
     /// See [The PlayStation Specifications](https://psx-spx.consoledev.net/soundprocessingunitspu/#spu-noise-generator_1) for more details.
     pub fn noise_settings(&self, shift: usize, step: usize) {
-        unsafe {
-            (*SPU_CNT).set_noise_freq_shift(shift as u16);
-            (*SPU_CNT).set_noise_freq_step(step as u16);
-        }
+        let mut control = Control::new();
+        control
+            .set_noise_freq_shift(shift as u16)
+            .set_noise_freq_step(step as u16)
+            .store();
     }
 
     fn set_ram_transfer(&self, mode: SpuRamTransfer) {
-        unsafe {
-            let mode_val: u16 = mode.into();
+        let mode_val: u16 = mode.into();
+        let mut control = Control::new();
+        let mut status = Status::skip_load();
 
-            // Change the RAM transfer mode.
-            (*SPU_CNT).set_ram_transfer(mode_val);
+        // Change the RAM transfer mode.
+        control.set_ram_transfer(mode_val).store();
 
-            // Wait until the change gets applied to the SPU.
-            while (*SPU_STAT).ram_transfer() != mode_val {}
-        }
+        // Wait until the change gets applied to the SPU.
+        while status.load().ram_transfer() != mode_val {}
     }
 
     fn set_transfer_mode(&self, mode: SpuTransferMode) {
-        unsafe {
-            match mode {
-                SpuTransferMode::Fill => (*SPU_TRANSCNT).set(0),
-                SpuTransferMode::Normal => (*SPU_TRANSCNT).set(2 << 1),
-                SpuTransferMode::Repeat2 => (*SPU_TRANSCNT).set(3 << 1),
-                SpuTransferMode::Repeat4 => (*SPU_TRANSCNT).set(4 << 1),
-                SpuTransferMode::Repeat8 => (*SPU_TRANSCNT).set(5 << 1),
-            }
+        let mut trans_cnt = TransControl::skip_load();
+        match mode {
+            SpuTransferMode::Fill => trans_cnt.assign(0),
+            SpuTransferMode::Normal => trans_cnt.assign(2 << 1),
+            SpuTransferMode::Repeat2 => trans_cnt.assign(3 << 1),
+            SpuTransferMode::Repeat4 => trans_cnt.assign(4 << 1),
+            SpuTransferMode::Repeat8 => trans_cnt.assign(5 << 1),
         }
+        .store();
     }
 
     fn set_transfer_address(&self, address: u32) {
-        unsafe {
-            (*SPU_TRANSADDR).set(address.unbounded_shr(3) as u16);
-        }
+        TransAddr::skip_load()
+            .assign(address.unbounded_shr(3) as u16)
+            .store();
     }
 
     /// Write data to an address in the SPU's RAM, without using the SPU's DMA
     /// channel.
     ///
     /// Note: The SPU RAM is only addressable by 8-byte chunks, so the
-    /// right-most 3 bits will be ignored.
+    /// right-most 3 address bits will be ignored.
     pub fn write_cpu(&self, mut address: u32, data: &[u16]) {
+        const SPU_FIFO: *mut u16 = 0x1F80_1DA8 as _;
+
         // Set the SPU transfer mode to normal.
         self.set_transfer_mode(SpuTransferMode::Normal);
 
@@ -414,15 +407,17 @@ impl Spu {
             // Send each half-word to the SPU's FIFO (the FIFO only has space for 32.)
             for word in chunk {
                 unsafe {
-                    (*SPU_FIFO).set(*word);
+                    SPU_FIFO.write_volatile(*word);
                 }
             }
 
             // Set the RAM transfer mode to "Manual Write" now.
             self.set_ram_transfer(SpuRamTransfer::ManualWrite);
 
+            let mut spu_status = Status::skip_load();
+
             // Wait for the Transfer Busy flag to go off.
-            unsafe { while (*SPU_STAT).transfer_busy() {} }
+            while spu_status.load().transfer_busy() {}
 
             // The additional delay is required for multi-block transfers according to
             // nocash's docs
