@@ -33,11 +33,11 @@ pub enum SweepPhase {
 
 /// The volume sweep structure.
 pub struct VolumeSweep {
-    pub mode: SweepMode,
-    pub direction: SweepDirection,
-    pub phase: SweepPhase,
-    pub shift: u8,
-    pub step: u8,
+    mode: SweepMode,
+    direction: SweepDirection,
+    phase: SweepPhase,
+    shift: u8,
+    step: u8,
 }
 
 /// SPU volume setting.
